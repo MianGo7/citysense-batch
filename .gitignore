@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environment files may hold local settings, never commit them
+.env
+.env.*
+
+# JetBrains, except the shared code style
+.idea/
+!.idea/codeStyles/
+
+# Local only notes, for example the paraphrased examination context.
+# IU objects to its examination tasks being republished, so these stay off
+# the remote. Removing this rule is a deliberate decision, not a cleanup.
+*.local.md
+
+# macOS
+.DS_Store
