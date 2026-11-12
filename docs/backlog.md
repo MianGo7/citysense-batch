@@ -27,7 +27,7 @@ backend), `dev-journal.md`.
 
 ---
 
-## B1, sample data in the repository. Open.
+## B1, sample data in the repository. Done, 2026-11-12.
 
 The CSV from the Kaggle data set is committed gzip compressed under
 `data/raw/`, with a `data/README.md` naming the source, the CC0 licence and

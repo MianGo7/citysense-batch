@@ -24,7 +24,7 @@ which is not committed.
 | --- | --- | --- | --- |
 | C1 | The sample data is loaded in daily batches | open | |
 | C2 | A failed batch can be rerun without creating duplicates | open | |
-| C3 | The 13 duplicate rows of the source are absorbed | open | |
+| C3 | The 13 duplicate rows of the source are absorbed | open | The 13 duplicates are pinned in `tests/unit/test_sample_data.py`; absorption by the loader is open (B4, B5) |
 | C4 | Implausible readings are flagged, kept, and excluded from summaries and alerts | open | |
 | C5 | A batch log records every run, and lost connections are retried | open | |
 | C6 | Hourly and daily summaries carry reading counts and coverage | open | |
@@ -34,3 +34,4 @@ which is not committed.
 | C10 | A TTL index on raw readings, summaries kept | open | |
 | C11 | A three node replica set survives the loss of the primary during a load | open | |
 | C12 | New metrics from future sensors are accepted without a schema change | open | |
+| C13 | The figures about the sample data quoted in the concept are reproduced by a script and pinned by a test | done | `scripts/profile_data.py`, `tests/unit/test_sample_data.py`, `data/README.md` |

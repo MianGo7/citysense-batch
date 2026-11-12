@@ -65,3 +65,49 @@ Resolved versions in `uv.lock` are pymongo 4.19.0, pytest 9.2.0 and ruff
 0.17.5.
 
 Next: B1, the sample data in the repository.
+
+---
+
+## 2026-11-12
+
+B1, the sample data in the repository, was taken. The original CSV is 61,926,558
+bytes and was verified against the SHA-256 recorded in the course notes before
+anything was derived from it. It is committed compressed with `gzip -9 -n`,
+which stores neither a file name nor a timestamp, so the same input always
+yields the same 6,466,866 byte archive. Both hashes are recorded in
+`data/README.md`, and a unit test checks the hash of the archive, because a
+silently changed data file would invalidate every figure derived from it.
+
+The profiling script `scripts/profile_data.py` streams the compressed file
+with the standard library and reproduces the facts of the concept: 405,184
+rows, three devices, 13 exact duplicates, 7 temperature readings of exactly
+0.0 and 38 humidity readings below 10 percent. The 13 duplicates on device
+and timestamp turned out to be the same 13 rows as the exact duplicates. A
+separate test asserts this, because the deterministic identifier of B4 relies
+on it: if two different readings shared a device and timestamp, one of them
+would be lost silently.
+
+Two problems occurred. The source file lay in a folder that the working
+environment was not allowed to read, and a first copy into a readable
+location failed without any visible message and left an empty directory, so
+the student compressed the file into the repository directly and the hashes
+were verified there instead. Furthermore, the first version of the range test
+failed on the humidity maximum: the source stores temperature and humidity as
+single precision values, so 99.9 appears as 99.9000015258789 and differs from
+99.9 by 1.5e-6, which is more than the tolerance of 1e-6 that had been chosen.
+The tolerance was not a property of the data but a guess, so it was replaced
+by 1e-4 with a comment stating the reason, which is far below the step of 0.1
+that the claim is made in. The profile output now prints seven significant
+digits for the same reason.
+
+Two findings concern the source itself and are documented in `data/README.md`
+without being resolved. The temperature is stated as Fahrenheit, but its
+observed range of 0.0 to 30.6 is consistent with Celsius, and the unit
+"ppm (%)" of the three gas columns is not explained. The system stores every
+value as delivered, so the interpretation is left open and is not decided in
+the code. In `requirements.md` the commitment C3 stays open, because only the
+fact is pinned and the loader does not absorb the duplicates yet. A new
+commitment C13 records that the quoted figures are reproduced and pinned, and
+it is done.
+
+Next: B2, the MongoDB replica set in Docker Compose.
