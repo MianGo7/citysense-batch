@@ -171,3 +171,72 @@ bugbear, pyupgrade and the simplification checks, with a line length of 100 as
 in `.editorconfig`. The consequence is that pymongo is the only runtime
 dependency, pytest and ruff are development dependencies in a separate group,
 and the image does not need to install the latter.
+
+---
+
+## ADR-0009, the MongoDB image, cache, port, authentication and member priorities. 2026-11-12, accepted.
+
+The replica set of ADR-0003 runs from the official `mongo` image with the exact
+tag `8.0.38`, so a fresh clone starts the version that was tested. The tag
+`latest` was rejected, and so was a tag that names only the major or minor
+version, because both move over time and the same clone would then behave
+differently from one month to the next. The 8.0 line was chosen over 7.0,
+which is older, and over 9.0, which is a newer major version and less
+established. Docker Compose is given the project name `citysense`, so that
+container and volume names do not depend on the name of the directory that was
+cloned.
+
+Every node starts with `--wiredTigerCacheSizeGB 0.25`, which is the smallest
+value MongoDB accepts. Without the option each node sizes its cache from the
+memory of the machine, and three nodes on one machine would each claim a large
+share of it. The small cache is a deliberate cost: it limits how much of the
+working set stays in memory, which the load in B5 will show. If the measured
+load time proves unacceptable, the value is revisited in a new entry instead of
+being adjusted silently.
+
+Only `mongo1` publishes a port, `127.0.0.1:27017`, for inspection with a
+database tool. The prototype runs without authentication, which is a deliberate
+limit and not an oversight. Key file authentication, the usual way to secure a
+replica set, was rejected because the key would either have to be committed to
+the repository or be generated in a manual setup step, and the fresh clone is
+required to start with one command and without credentials. The loopback binding
+compensates for the missing authentication, since the port is not reachable from
+the network. Publishing all three nodes was rejected because it widens the
+exposure for no gain, and publishing no port was rejected because inspection
+would then need a shell inside a container. A production setup would enable
+authentication and transport encryption. The members advertise their internal
+host names, which the host cannot resolve, so a tool on the host connects with
+`directConnection=true`.
+
+The members have priorities, 2 for `mongo1` and 1 for `mongo2` and `mongo3`.
+With equal priorities the primary after a clean start is arbitrary, so the
+published port could reach a secondary and the documentation could not describe
+the state of the stack as fixed. With the priorities, `mongo1` is the primary
+after a clean start and takes over again when it returns after a failure, which
+costs a second election. The loader of B5 therefore has to survive two
+elections in a failover test, the loss of the primary and the return of
+`mongo1`.
+
+The replica set is initiated by the one shot service `mongo-setup`, which uses
+the same image and therefore adds no second image. Its script treats the error
+`NotYetInitialized` as the signal to initiate and does nothing otherwise, so
+that it is safe to run on every start of the stack. It waits for a primary in
+both cases and exits with code 0, so that a service depending on it with
+`service_completed_successfully` starts against a writable replica set. A flag
+file was rejected as the signal, because the state of the replica set lives in
+the data volumes and a file outside of them could disagree with it. Mounting an
+initialisation script into the data directory of the nodes was rejected,
+because such scripts run only on an empty data directory and before the other
+members exist.
+
+The image declares anonymous volumes for `/data/db` and `/data/configdb`. Each
+recreation of a container would leave them behind, because only `down -v`
+removes them. The directory `/data/configdb` only holds the metadata of sharded
+config servers, so it is mounted as `tmpfs` on the nodes, and both directories
+are mounted as `tmpfs` on `mongo-setup`, which stores nothing. The data of the
+nodes is held by one named volume each, mounted at `/data/db`.
+
+One compatibility note belongs in the limits of the README (B9): MongoDB 5.0 and
+later require a processor with the AVX instruction set on x86 machines. The
+official image is published for several architectures, so it runs on x86 and on
+Apple silicon.

@@ -10,7 +10,7 @@ which is not committed.
 
 | Id | Requirement | Status | Where |
 | --- | --- | --- | --- |
-| R1 | The database runs in Docker from an open source image on Docker Hub | open | |
+| R1 | The database runs in Docker from an open source image on Docker Hub | done | `docker-compose.yml` (official `mongo:8.0.38`, ADR-0009), `db/init-replica-set.js`, `tests/integration/test_stack.py` |
 | R2 | A script sets up the database inside the container | open | |
 | R3 | A Python script connects to the database and loads the sample data | open | |
 | R4 | A Dockerfile automates the entire process | open | |
@@ -32,6 +32,6 @@ which is not committed.
 | C8 | Alerts follow the alert model: deduplicated, with hysteresis, capped, with sensor silent and batch failed alerts | open | |
 | C9 | A compound index on device and descending timestamp | open | |
 | C10 | A TTL index on raw readings, summaries kept | open | |
-| C11 | A three node replica set survives the loss of the primary during a load | open | |
+| C11 | A three node replica set survives the loss of the primary during a load | open | The replica set elects a new primary after the loss of mongo1 (B2, journal 2026-11-12); survival of a load is open (B5, B8) |
 | C12 | New metrics from future sensors are accepted without a schema change | open | |
 | C13 | The figures about the sample data quoted in the concept are reproduced by a script and pinned by a test | done | `scripts/profile_data.py`, `tests/unit/test_sample_data.py`, `data/README.md` |

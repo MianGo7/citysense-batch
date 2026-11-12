@@ -1,0 +1,74 @@
+# Three node MongoDB replica set, see ADR-0009 for the choices made here.
+name: citysense
+
+x-mongod: &mongod
+  # The exact patch version keeps a fresh clone on the version that was tested.
+  image: mongo:8.0.38
+  # A small cache per node, because three nodes share one machine. Without the
+  # option each node would claim roughly half of the available memory.
+  command:
+    - mongod
+    - --replSet
+    - rs0
+    - --bind_ip_all
+    - --wiredTigerCacheSizeGB
+    - "0.25"
+  restart: unless-stopped
+  # The image declares an anonymous volume here. It only holds the metadata of
+  # sharded config servers, which this stack does not run, and every recreation
+  # of a container would leave an orphaned volume behind.
+  tmpfs:
+    - /data/configdb
+  healthcheck:
+    test: ["CMD", "mongosh", "--quiet", "--eval", "quit(db.adminCommand('ping').ok === 1 ? 0 : 1)"]
+    interval: 5s
+    timeout: 5s
+    retries: 12
+    start_period: 10s
+
+services:
+  mongo1:
+    <<: *mongod
+    # The only published port, bound to the loopback interface because the
+    # prototype runs without authentication. Mongo1 has the highest priority,
+    # so it is the primary after a clean start.
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo1-data:/data/db
+
+  mongo2:
+    <<: *mongod
+    volumes:
+      - mongo2-data:/data/db
+
+  mongo3:
+    <<: *mongod
+    volumes:
+      - mongo3-data:/data/db
+
+  # One shot service. It exits with code 0 on the first start and on every
+  # repeated start, so that services which depend on it can wait for it.
+  mongo-setup:
+    image: mongo:8.0.38
+    restart: "no"
+    depends_on:
+      mongo1:
+        condition: service_healthy
+      mongo2:
+        condition: service_healthy
+      mongo3:
+        condition: service_healthy
+    volumes:
+      - ./db:/db:ro
+    # The image declares anonymous volumes for its data directories. This service
+    # stores nothing, so they are memory backed to leave no orphaned volumes.
+    tmpfs:
+      - /data/db
+      - /data/configdb
+    command: ["mongosh", "--quiet", "--host", "mongo1", "--port", "27017", "--file", "/db/init-replica-set.js"]
+
+volumes:
+  mongo1-data:
+  mongo2-data:
+  mongo3-data:

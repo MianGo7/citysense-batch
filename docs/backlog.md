@@ -43,7 +43,7 @@ Documents to update: `requirements.md`, `dev-journal.md`.
 
 ---
 
-## B2, MongoDB replica set in Docker Compose. Open.
+## B2, MongoDB replica set in Docker Compose. Done, 2026-11-13.
 
 Three `mongod` services from the official image with an exact version tag, a
 one shot `mongo-setup` service that initiates the replica set `rs0` and does
