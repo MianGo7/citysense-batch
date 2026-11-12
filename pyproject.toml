@@ -1,0 +1,32 @@
+[project]
+name = "citysense"
+version = "0.1.0"
+description = "Batch oriented data system for municipal environmental sensor data"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "pymongo>=4.19,<5",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=9,<10",
+  "ruff>=0.17,<0.18",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.23,<0.13"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: needs the running Docker Compose stack",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]

@@ -10,9 +10,10 @@ entry there. The status of an item is open, in progress or done.
 
 ---
 
-## B0, repository skeleton and toolchain. Open.
+## B0, repository skeleton and toolchain. Done, 2026-11-12.
 
-A Python 3.12 project managed with uv: `pyproject.toml`, `uv.lock`, the
+A Python 3.13 project managed with uv (originally planned with 3.12, changed
+in ADR-0008): `pyproject.toml`, `uv.lock`, the
 package `src/citysense/` with empty modules one per planned component,
 `tests/unit/` and `tests/integration/` with the `integration` marker
 registered, pytest and ruff as development dependencies, pymongo as the only
@@ -21,8 +22,8 @@ runtime dependency, and a `.dockerignore`.
 Done when `uv run pytest tests/unit` runs green on a placeholder test and
 `uv run ruff check .` reports nothing.
 
-Documents to update: `decision-log.md` (Python version, uv, ruff),
-`dev-journal.md`.
+Documents to update: `decision-log.md` (Python version, uv, ruff, build
+backend), `dev-journal.md`.
 
 ---
 

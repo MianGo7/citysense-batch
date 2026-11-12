@@ -133,3 +133,41 @@ coverage, and a failed batch raises an alert as well.
 
 Open: the concrete thresholds. They are proposed in B7 with the number of
 alerts each choice produces over the sample week.
+
+---
+
+## ADR-0008, Python 3.13 with uv, uv_build and ruff. 2026-11-12, accepted.
+
+The loader needs a reproducible Python toolchain that behaves identically on
+the development machine, in the continuous integration run and in the loader
+image. The project therefore uses Python 3.13, declared as
+`requires-python = ">=3.13,<3.14"`, with uv for environments and dependency
+resolution, uv_build as the build backend, and ruff for linting and
+formatting. Dependency ranges in `pyproject.toml` are compatible ranges, for
+instance `pymongo>=4.19,<5`, while the exact versions are pinned only in
+`uv.lock`. The loader image has to install with `uv sync --locked`, so that a
+lock file which no longer matches `pyproject.toml` fails the build instead of
+being silently regenerated.
+
+The backlog originally named Python 3.12. The version was changed to 3.13
+because 3.13 is already installed on the development machine, so uv needs no
+interpreter download there, and because pymongo, pytest and ruff all support
+it. The upper bound `<3.14` keeps the interpreter from moving unnoticed to a
+version that has not been tested.
+
+For the dependency management, pip with hand maintained requirements files
+was rejected because it records no resolved lock file and keeps development
+and runtime dependencies apart only by convention. Poetry was rejected
+because it adds a further tool to install in the image for no capability that
+uv lacks. For the build backend, hatchling was rejected because it is one more
+package in the lock file, while uv_build is maintained together with uv and
+needs no additional configuration for the `src/` layout. For the code quality
+tools, flake8 combined with black and isort was rejected because three tools
+with three configurations are replaced by ruff, which lints, sorts imports and
+formats from one configuration in `pyproject.toml`.
+
+The rule set of ruff is the pycodestyle errors, pyflakes, import sorting,
+bugbear, pyupgrade and the simplification checks, with a line length of 100 as
+in `.editorconfig`. The consequence is that pymongo is the only runtime
+dependency, pytest and ruff are development dependencies in a separate group,
+and the image does not need to install the latter.

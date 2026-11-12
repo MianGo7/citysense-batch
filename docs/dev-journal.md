@@ -37,3 +37,31 @@ reliability claim that can be demonstrated by stopping the primary during a
 load is stronger than one that is only described.
 
 Next: B0, the repository skeleton and toolchain.
+
+---
+
+## 2026-11-12
+
+B0, the repository skeleton and toolchain, was taken. The item adds
+dependencies, so a plan was stated first and the build backend, the
+dependency ranges and the interpreter version were put to the student before
+any file was written. The decisions were uv_build as the build backend,
+compatible ranges in `pyproject.toml` with exact versions only in `uv.lock`,
+and Python 3.13 instead of the 3.12 named in the backlog, because 3.13 is
+already installed on the development machine. They are recorded in ADR-0008,
+and the text of B0 in the backlog was changed to match.
+
+The package `src/citysense/` now holds the nine modules of the planned layout
+with docstrings only, `tests/unit/` and `tests/integration/` exist with the
+`integration` marker registered, and a `.dockerignore` keeps the history,
+caches, documents and tests out of the later image. The placeholder unit test
+does more than prove that pytest runs: it parses the four rule modules and
+fails if one of them imports pymongo, so the architecture rule is enforced
+from the first commit. The first version of that test searched the source text
+for the word and needed a string replacement to exclude its own docstring,
+which was fragile, so it was rewritten to inspect the import statements.
+
+Resolved versions in `uv.lock` are pymongo 4.19.0, pytest 9.2.0 and ruff
+0.17.5.
+
+Next: B1, the sample data in the repository.
