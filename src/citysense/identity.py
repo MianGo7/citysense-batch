@@ -43,6 +43,16 @@ def instant(ms):
     return EPOCH + timedelta(milliseconds=ms)
 
 
+def milliseconds(moment):
+    """Return the whole milliseconds since the epoch of an aware datetime.
+
+    This is the inverse of `instant` and is used to rebuild a reading from the
+    stored date. The division of two timedeltas is exact, whereas `timestamp()`
+    returns a float.
+    """
+    return (moment - EPOCH) // timedelta(milliseconds=1)
+
+
 def identifier(device, ms):
     """Return the identifier of a reading from its device and its milliseconds."""
     if not device or SEPARATOR in device:

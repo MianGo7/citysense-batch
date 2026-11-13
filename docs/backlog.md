@@ -98,7 +98,7 @@ Documents to update: `decision-log.md`, `requirements.md`, `dev-journal.md`.
 
 ---
 
-## B5, the loader and its container. Open.
+## B5, the loader and its container. Done, 2026-11-13.
 
 `loader.py` processes the daily batches in order. Each batch is recorded in
 `batch_runs` as running, written in chunks as bulk upserts that only insert

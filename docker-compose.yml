@@ -1,4 +1,5 @@
-# Three node MongoDB replica set, see ADR-0009 for the choices made here.
+# Three node MongoDB replica set, see ADR-0009 for the choices made here, and the
+# loader that fills it, see ADR-0012.
 name: citysense
 
 x-mongod: &mongod
@@ -80,6 +81,27 @@ services:
         mongosh --quiet \
           "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0" \
           --file /db/setup-database.js
+
+  # One shot service that loads the sample data and exits with code 0 when every
+  # batch is completed. It starts after the setup has created the validators and
+  # indexes, because documents written earlier would escape the validation.
+  loader:
+    build: .
+    restart: "no"
+    # The first process of a container ignores the default action of SIGTERM, so
+    # `docker stop` would wait ten seconds and then kill the loader. The init
+    # process forwards the signal.
+    init: true
+    depends_on:
+      mongo-setup:
+        condition: service_completed_successfully
+    environment:
+      # Through the replica set, so that the loader finds the primary, which is
+      # not always mongo1 after a restart.
+      MONGODB_URI: mongodb://mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0
+      # An unset variable stays empty, and the loader reads an empty value as
+      # the default, which loads every batch.
+      MAX_BATCHES: ${MAX_BATCHES:-}
 
 volumes:
   mongo1-data:

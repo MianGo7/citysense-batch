@@ -1,6 +1,7 @@
 """Unit tests of the plausibility rules, on synthetic readings."""
 
 import math
+import random
 
 import pytest
 
@@ -250,3 +251,59 @@ def test_continuing_from_a_rebuilt_state_gives_the_flags_of_the_uninterrupted_ru
         _, rebuilt = flag_readings(before[last_valid:])
         flags_after, _ = flag_readings(after, rebuilt)
         assert list(flags_before) + list(flags_after) == list(whole), cut
+
+
+# The state that the loader rebuilds from the database after a restart.
+
+
+def random_history(seed, length=400):
+    """Readings of one device with spikes, steps, range violations and gaps."""
+    generator = random.Random(seed)
+    readings = []
+    ms = 1_594_512_000_000
+    temp, humidity = 20.0, 50.0
+    for _ in range(length):
+        ms += generator.choice([STEP_MS] * 8 + [MAX_GAP_MS + 1_000])
+        draw = generator.random()
+        if draw < 0.15:
+            temp += generator.choice([-1, 1]) * generator.uniform(3.1, 12.0)
+        elif draw < 0.25:
+            humidity += generator.choice([-1, 1]) * generator.uniform(10.1, 40.0)
+        elif draw < 0.30:
+            humidity = generator.choice([-5.0, 105.0])
+        else:
+            temp += generator.uniform(-0.5, 0.5)
+            humidity += generator.uniform(-1.0, 1.0)
+        readings.append(
+            Reading(f"d1|{ms}", "d1", ms, {**NORMAL, "temp": temp, "humidity": humidity})
+        )
+        # Every so often the source repeats a row, which is stored only once.
+        if generator.random() < 0.03:
+            readings.append(readings[-1])
+    return readings
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_the_state_follows_from_the_last_valid_reading_and_the_jump_flags_after_it(seed):
+    # The store keeps the readings with their flags and nothing else, so it can
+    # only supply the last valid reading and a count of jump flags after it. This
+    # checks that the two are enough, at every point of a long history, including
+    # the case of a reading that the streak accepts while a range rule flags it.
+    state = DeviceState()
+    stored = []
+    seen = set()
+    for each in random_history(seed):
+        last_valid = max((i for i, (_, flags) in enumerate(stored) if not flags), default=None)
+        if last_valid is None:
+            rebuilt = (None, 0)
+        else:
+            after = stored[last_valid + 1 :]
+            jumps = sum(any(flag.endswith("_jump") for flag in flags) for _, flags in after)
+            rebuilt = (stored[last_valid][0], jumps)
+        assert rebuilt == (state.reference, state.jump_streak)
+
+        result = check_reading(each, state)
+        state = result.state
+        if each.id not in seen:
+            seen.add(each.id)
+            stored.append((each, result.flags))

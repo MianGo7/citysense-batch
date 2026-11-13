@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from citysense.identity import epoch_ms, identifier, instant, reading_id
+from citysense.identity import epoch_ms, identifier, instant, milliseconds, reading_id
 
 DEVICE = "b8:27:eb:bf:9d:51"
 
@@ -72,3 +72,8 @@ def test_different_devices_at_one_instant_have_different_identifiers():
 
 def test_instant_is_an_aware_utc_datetime_and_exact():
     assert instant(1594512094385) == datetime(2020, 7, 12, 0, 1, 34, 385000, tzinfo=UTC)
+
+
+def test_milliseconds_is_the_inverse_of_instant():
+    for ms in (0, 1, 999, 1_594_512_094_385, 1_595_203_417_299):
+        assert milliseconds(instant(ms)) == ms

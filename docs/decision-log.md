@@ -471,3 +471,131 @@ of which shows no spikes, and they have to be revisited for every new sensor
 type, as a metric that is not listed has no rule until it is added. The range of
 the temperature assumes Celsius, and the stored values are kept as delivered
 (ADR-0010).
+
+Note added on 2026-11-13 (B5): the last paragraph of this entry says that the
+state of a device is rebuilt by passing the last valid reading and every reading
+after it through the rules. The loader obtains the same state from two values,
+the last valid reading before the batch and the number of readings after it that
+carry a jump flag, see ADR-0012. A unit test shows that the two values are
+enough at every point of long synthetic histories, among them readings that the
+streak accepts while a range rule flags them. The text of this entry is
+otherwise unchanged.
+
+---
+
+## ADR-0012, the loader, its retries and its image. 2026-11-13, accepted.
+
+The loader walks through the daily batches in chronological order. A batch whose
+entry in `batch_runs` is completed is skipped. Any other batch, including one
+that is still marked as running, is processed again from its first row, in full.
+A running entry on a rerun means that the earlier attempt was interrupted, and
+the attempt counter of the entry records how many tries a day needed. Resuming
+from a checkpoint inside a batch was rejected, because it would add a second
+kind of state that has to stay consistent with the stored readings and would
+save nothing, since repeating a chunk costs one comparison of identifiers per
+reading.
+
+Readings are written in chunks of 5,000 as unordered bulk updates with an upsert
+and `$setOnInsert`, with the write concern `majority`. A stored reading is never
+changed, so a repeated reading, a repeated chunk and a repeated batch alter
+nothing, and the 13 duplicate rows of the source are absorbed by the same
+mechanism. Plain inserts were rejected, because a duplicate would raise an error
+that has to be told apart from a failure, and `$set` was rejected, because it
+would let a rerun overwrite readings with flags that were computed from another
+state. The writes are unordered so that one rejected document does not hide the
+others, and the cost is that an interrupted write can leave gaps, which is why
+the state of the rules never comes from the batch in progress. A chunk size of
+5,000 keeps one request small and makes a repeated chunk cheap. The value is a
+setting.
+
+The flags of a reading depend on the readings before it, so the state of the
+rules has to be the same on the first try and on every rerun. The state of each
+device is therefore rebuilt from the stored readings before the start of the
+batch and from nothing else. It consists of the last reading without flags and
+the number of readings after it that carry a jump flag. The streak counts jump
+flags and not all flags, because a reading that a range rule alone flags leaves
+the streak as it was. The whole batch is then processed from its first row, and
+the readings that an interrupted attempt wrote stay untouched, so the flags are
+identical however far that attempt got. Taking the state from the last stored
+reading of the day was rejected, because a gap left by an unordered write would
+then give a rerun a state that the first attempt never had. The integration
+tests interrupt a batch in three ways, with a first chunk written, with a later
+chunk written alone and with every third row written, and compare all 405,171
+stored flags with those of an uninterrupted load. A change that took the state
+from the end of the day instead of its start made one of these tests fail.
+
+The batch log keeps four counts per batch, the rows read, the readings inserted,
+the readings that were already present and the readings flagged. The counts
+describe the last attempt. After an interrupted attempt, the readings that it
+wrote are counted as already present, so the sum of inserted and already present
+is the number of rows read, and the number of stored readings of the day does
+not depend on the history. The flagged count is over distinct stored readings,
+so a repeated row is not counted twice. On the sample the loader reads 405,184
+rows, inserts 405,171, finds 13 already present and flags 580, as pinned per day
+in `tests/integration/test_loading.py`, and the 580 equal the count that the
+profile script finds in the same file.
+
+Operations that touch the database are repeated after a lost connection or a
+change of primary. The driver keeps retryable writes switched on and waits up to
+30,000 milliseconds for a suitable server. Beyond that, the loader repeats a
+read, a write to the batch log or a chunk after `AutoReconnect`,
+`NotPrimaryError`, `ServerSelectionTimeoutError` or `WriteConcernError`, waiting
+2, 4, 8, 16 and 30 seconds between the six attempts, which adds up to one
+minute. The gap between the loss of a primary and the election of the next one
+was measured at about 11 seconds during B2 (journal of 2026-11-12) and is made
+reproducible by B8, so the schedule covers it several times. A shorter schedule
+would give up inside one election, and a constant wait would add load while a
+member recovers, hence the exponential growth with a cap. The numbers are
+constants of the code and not settings, because a deployment has no reason to
+change them. An error of another kind, such as a document that the validator
+rejects, would fail again in the same way, so it is not repeated. The driver
+reports a write concern error of a bulk write inside a bulk error that cannot be
+told apart from a rejected document, so the store raises it as its own class. A
+batch that exhausts its attempts is marked as failed with the text of the
+error, at most 1,000 characters, and the process exits with the code 1, and no
+later batch is loaded, because the rules of the next day need the stored
+readings of this one. B7 turns the failed entry into an alert of the type
+`batch_failed`. A source that cannot be read, for instance because a row is
+malformed, also ends the run with the code 1. Nothing of that batch has been
+written by then, so it has no entry in the log, and the alert for this case is
+left to B7. A setting with an invalid value ends the run with the code 2 before
+any connection is made.
+
+The settings are read from the environment and are all optional. `MONGODB_URI`
+defaults to the published port of `mongo1`, and Compose sets the replica set
+address, so that the loader finds the primary whichever node it is. `DATABASE`
+defaults to `citysense` and exists so that the integration tests can load into
+scratch databases, as a test hook in the production code was rejected. `CHUNK_SIZE`
+and `SOURCE_FILE` complete the list. `MAX_BATCHES` stops a run after that many
+batches were loaded, and unset means all. A batch that is skipped as completed
+does not count, so that two runs with the limit 3 load the first six days. The
+limit also simulates the daily arrival of data, which the tests use instead of a
+hook. The loader writes one line per batch with the day, the counts and the
+duration, and a last line with the totals and the total duration.
+
+The image is built in two stages from `python:3.13.18-slim-trixie`, and the uv
+binary is copied from `ghcr.io/astral-sh/uv:0.12.23`. Both tags were pulled on
+2026-11-13 to verify that they exist. A moving tag such as `python:3.13-slim` was
+rejected for the reason given in ADR-0009 for the database image, and installing
+uv with pip was rejected, because its version would then follow the package
+index and not the tag. The full Python image was rejected, because it carries
+compilers that the loader does not need. An Alpine based image was not tried,
+as the size of the finished image, 229 MB, is not a requirement. The dependencies
+are installed with `uv sync --locked`, which fails if `uv.lock` does not match
+`pyproject.toml`, so the image never resolves a version on its own, and the build
+log shows that building the package of the project fetched nothing from the
+network. The final stage holds the environment, the sample file and nothing
+else, and the process runs as the user `loader` with the identifier 10001
+without privileges. The Compose service has `restart: "no"`, waits until
+`mongo-setup` has completed successfully, because documents written before the
+validators exist would escape them, and runs with `init: true`, because the first
+process of a container ignores the default action of SIGTERM and `docker stop`
+would otherwise wait ten seconds and then kill it.
+
+The cache of 0.25 GB per node, which ADR-0009 left to be checked by this load,
+is sufficient for the sample. The loader needs 18.6 seconds for the first load
+from clean volumes in one run and 16.8 seconds in another, as printed by its last
+line, so the cache is not revisited. Two limits remain. A write that is in flight
+when the primary is killed is covered by the retries, but a reproducible
+demonstration with a real kill belongs to B8, and the count of a batch that was
+retried after a partial write is a count of the last attempt only.

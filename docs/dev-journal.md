@@ -337,3 +337,84 @@ placed.
 
 Next: B5, the loader and its container.
 
+
+## 2026-11-13
+
+B5, the loader and its container, was taken after the plan had been approved
+with a set of fixed numbers: the images, the treatment of a batch that is still
+running on a rerun, the retry schedule of 2, 4, 8, 16 and 30 seconds, a chunk size of 5,000,
+unordered writes and four counts per batch. The result is `config.py`, `store.py`,
+`loader.py` and `__main__.py`, a two stage `Dockerfile` and the service `loader`
+in Compose, and the decisions are in ADR-0012. Both base images were pulled with
+their exact tags before they were written down. A clean start with
+`docker compose down -v && docker compose up --build` loads 405,184 rows into
+405,171 readings, finds the 13 repeated rows already present, stores 580 flagged
+readings, and the loader container exits with the code 0. The last line of the
+loader reported 18.6 seconds for the first load in one run and 16.8 seconds in
+another, so the cache of 0.25 GB per node that ADR-0009 left to be checked here
+is sufficient and is not revisited. These are two observations from the log of
+the loader, not a benchmark.
+
+The central point is that the flags of a reading depend on the readings before
+it, so that an interrupted and repeated batch could yield other flags than an
+uninterrupted one. The state of every device is therefore rebuilt from the
+stored readings before the start of the batch only, and the batch is processed
+from its first row. This differs in its mechanism from the sentence at the end of
+ADR-0011, which describes a replay from the last valid reading. The loader reads
+the last valid reading and the number of jump flags after it instead, which is
+two cheap queries on the index `device_ts`, and a note under ADR-0011 says so. A
+unit test checks on twenty random histories, with spikes, steps, range
+violations, gaps longer than the maximum age and repeated rows, that the two
+values equal the state of the rules at every point. Counting all flags instead of
+the jump flags made all twenty fail, so the test does discriminate.
+
+The integration tests interrupt a batch in three ways, by writing a running entry
+in the batch log together with the first chunk of a day, with a later chunk alone,
+and with every third row, as an unordered write can leave gaps. After the rerun
+every one of the 405,171 flags equals the flags of an uninterrupted load in a
+scratch database. A change that took the state from the end of the day instead of
+the start was caught by one of these three, but not by the other two, which is why
+the case with every third row matters. The unit tests with an in-memory store
+catch the same change in the two of their five variants that leave gaps, the late
+rows alone and the mixed case.
+
+Several checks failed before they passed. The first expected counts
+in the unit scenario were wrong, because the first day has 15 rows and not 14,
+and the formula for the readings that were already present was wrong when the
+rows left behind contained both copies of the repeated row. Both were errors of
+the test and not of the loader. A deliberate break of the flagged count, from
+distinct readings to rows, was not caught at first, because the repeated rows of
+the scenario were not flagged, so that rows and distinct readings gave the same
+number. A flagged repeated row was added to the scenario and the break is now
+caught. A deliberate break of the streak query in the store, from jump flags to
+all flags, survived the integration tests on the sample, because the sample has
+no flag of a range rule at all and no run of flags across midnight. A store level
+test with readings made for the question now catches it. One break did not run at
+all, because the substitution left unbalanced brackets, and it was repeated in
+a valid form. Finally, two test modules named `test_loader.py` in the unit and the
+integration directory collided during collection, and the integration module was
+renamed `test_loading.py`.
+
+One trial was made without a record in the repository: the primary `mongo1` was
+killed with `docker kill` during a load into a scratch database. The batch in
+flight took visibly longer than the others, no retry was logged, so the driver
+handled the failover by itself within its server selection timeout, and the
+scratch database ended with the same readings and the same 580 flags. This is
+not evidence, because no script produces it, and no figure of it is quoted. The
+reproducible demonstration of the loss of the primary during a load is B8. The
+requirement C5 therefore stays open, since the retry schedule is only tested with
+injected errors, and so does C11.
+
+Points that were added or decided on the way and need the student's attention.
+The setting `DATABASE` was added, because the integration tests load into scratch
+databases and a hook in the production code was rejected. The setting
+`MAX_BATCHES` counts the batches loaded in one run and not those completed in
+total, so two runs with the limit 3 load six days. A source that cannot be parsed
+ends the run with the code 1 but leaves no entry in the batch log, because the
+day is not known when the slicing fails, and the alert for it is left to B7. The
+counts in the batch log describe the last attempt, which is stated in ADR-0012.
+The image was built once from a copy of the files that a commit would contain, in
+a directory of the session, to make sure that it does not depend on files that are
+untracked. The README and the demonstration of a restart come with B8 and B9.
+
+Next: B6, derived data, after the commit of B5.
