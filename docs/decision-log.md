@@ -358,3 +358,116 @@ Furthermore, the validator does not compare `_id` with `device` and `ts`, so a
 loader that builds an inconsistent identifier would not be stopped by the
 database. That agreement is meant to be a property of `identity.py`, which B4 builds and
 tests.
+
+---
+
+## ADR-0011, identifiers, batch slicing and plausibility rules. 2026-11-13, accepted.
+
+The rules of the loader live in three modules that do not import pymongo,
+`identity.py`, `batches.py` and `validation.py`, so that they are tested without
+a database. A reading that is implausible is flagged and kept, never dropped,
+because deleting it would hide the fault from the data engineer and the
+concept demands flags. The flags are strings in `quality.flags`, named
+`<metric>_range` and `<metric>_jump`, and a reading is valid exactly when the
+list is empty, which is the selection that summaries and alerts use. The figures
+in this entry are produced by `scripts/profile_data.py` and pinned in
+`tests/unit/test_sample_data.py`, so the entry states what the loader does with
+the sample file.
+
+The identifier of a reading is `<device>|<epoch milliseconds>`, with the
+milliseconds computed from the raw text of the timestamp by exact decimal
+arithmetic and truncated, as fixed in ADR-0010. A conversion through a float was
+rejected, because the unit tests contain timestamps with more digits than the
+sample on which a float lands on the neighbouring millisecond, so that the
+identifier and `ts` would disagree. On the sample the truncation leaves the 13
+duplicate rows as 13 duplicates on device and millisecond, which is the
+condition under which absorbing them loses no reading. A device name that
+contains the separator is rejected, because the identifier would be ambiguous.
+
+The source is sliced into one batch per UTC day, in chronological order, and the
+day is taken from the truncated millisecond, like the identifier, so that a
+reading just before midnight is never moved to the next day. The sample yields
+nine batches, from 12 to 20 July, with 50,462, 50,121, 50,719, 51,058, 51,040,
+50,386, 50,074, 51,196 and 128 rows. The file is read once, and only the batch
+in progress is held in memory. Time must not go backwards for one device, and
+equal timestamps are allowed, because a strict check would fail the batch on the
+duplicate rows before they reach the identifier logic. A reading from an earlier
+day than the batch in progress is an error as well, since that batch has been
+handed on already. A row that cannot be parsed fails the batch with its line
+number. Flagging such a row was rejected, because a value that is not a number
+cannot be stored in a typed field, and dropping it was rejected, because that is
+the silent loss that the batch log exists to prevent. An unknown column in the
+header also fails the batch, since a new column is a new metric that has to be
+added on purpose.
+
+The range rules are deliberately wide. Temperature must lie between -40 and 60
+degrees, taken as Celsius, because the observed values are consistent with
+Celsius although the source states Fahrenheit. Humidity must lie between 0 and
+100 percent. The gases `co`, `lpg` and `smoke` must be finite and not negative,
+without an upper bound, because the source does not explain the unit "ppm (%)"
+and a ceiling could not be justified. These rules flag no reading of the sample,
+as the count of flags other than jumps, which is 0, shows. A fixed lower bound
+of 10 percent for the humidity was rejected, because it has no physical basis
+here and because the jump rule already flags all 38 humidity readings below 10
+percent.
+
+The jump rule compares a reading of temperature or humidity with the reference
+of its device, which is the last unflagged reading, and flags it when the
+difference exceeds 3 degrees or 10 percentage points. The comparison is made
+only if the reference is at most 300 seconds old, and the largest interval
+between two readings of one device in the sample is 40.2 seconds. Comparing with
+the previous raw reading was rejected, because it flags a single spike and the
+normal reading after it, whereas the reference flags only the spike. Judging a
+reading by both of its neighbours was rejected, because the last reading of a
+batch has no successor, so a batch would not be final until the next one
+arrives. A limit per second was rejected as the simpler rule suffices together
+with the maximum age of the reference. The gases have no jump rule, because
+without an explained unit no limit can be justified, and a limit read off the
+sample would be fitted to it.
+
+On the 405,171 stored readings the rules flag 580, which is about 0.14 percent:
+261 by the temperature jump only, 230 by the humidity jump only and 89 by both.
+All 7 temperature readings of exactly 0.0 and all 38 humidity readings below 10
+percent are among them, and the other 535 flagged readings are explained by the
+same phenomenon. The flagged jumps are single readings that leave the level of
+the device by a distinct amount. The sizes of the temperature jumps cluster at
+3.2, 6.4, 12.8, 19.2 and 25.6 degrees and those of the humidity jumps at 12.8,
+19.2, 25.6 and 51.2 percentage points, and 349 of the 350 temperature jumps and
+306 of the 319 humidity jumps lie within 0.4 of a multiple of 3.2, whereas sizes
+spread evenly would do so in a quarter of the cases. This is an observation, and
+no cause is claimed for it. The device `b8:27:eb:bf:9d:51` has no flagged jump,
+the device `00:0f:00:70:91:0a` has 236 temperature and 223 humidity jumps, and
+the device `1c:bf:ce:15:ec:4d` has 114 and 96. The limits lie below the
+smallest class of each metric, around 3.2 for the temperature and around 12.8
+for the humidity.
+
+A real fast change, for instance a fire, is flagged in its first two readings,
+and the third is accepted as the new reference, so that a change of level cannot
+lock a device out. This is the trade-off of the rule. Two flagged readings span
+about twice the median interval, which is 5.4 seconds for two devices and 3.7
+for the third, so roughly 7 to 11 seconds. That is far below the batch interval
+of one day, and alerts are only as current as the batch interval, so the delay
+does not change how current an alert is. The measured cost on the sample is two
+re-baselines, both for humidity, a rise of the device `1c:bf:ce:15:ec:4d` on 14
+July at 21:00 and one of the device `00:0f:00:70:91:0a` on 16 July at 20:12, each
+with two flagged readings before the third was accepted. The alternative of the
+limits 5 degrees and 30 points was rejected, because it lets the smaller spike
+classes through. Among the flagged jumps there are 46 temperature jumps of 5
+degrees or less and 196 humidity jumps of 30 points or less, and every one of
+them would remain in the hourly minimum and maximum that planners read, where a
+single spike is far more visible than in the mean.
+
+The state of a device consists of the reference, the length of the current run of
+jump flags and the identifier of the last reading. A reading that repeats the
+identifier of the previous one receives the flags of the first and changes
+nothing, because only the first is stored. The state is rebuilt after a restart
+by passing the last valid reading of the device and every reading after it
+through the rules from an empty state. A unit test checks that this reproduces
+the flags of an uninterrupted run at every possible cut, so a rerun of a batch
+yields the same flags. The loader of B5 reads that history from the database.
+
+The limits are stated openly as limits. They are derived from three sensors, one
+of which shows no spikes, and they have to be revisited for every new sensor
+type, as a metric that is not listed has no rule until it is added. The range of
+the temperature assumes Celsius, and the stored values are kept as delivered
+(ADR-0010).

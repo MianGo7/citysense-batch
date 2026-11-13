@@ -22,10 +22,10 @@ which is not committed.
 
 | Id | Commitment | Status | Where |
 | --- | --- | --- | --- |
-| C1 | The sample data is loaded in daily batches | open | |
+| C1 | The sample data is loaded in daily batches | open | The slicing into nine daily batches is pinned in `tests/unit/test_sample_data.py` (`batches.py`, ADR-0011); the loading is open (B5) |
 | C2 | A failed batch can be rerun without creating duplicates | open | |
-| C3 | The 13 duplicate rows of the source are absorbed | open | The 13 duplicates are pinned in `tests/unit/test_sample_data.py`; absorption by the loader is open (B4, B5) |
-| C4 | Implausible readings are flagged, kept, and excluded from summaries and alerts | open | |
+| C3 | The 13 duplicate rows of the source are absorbed | open | The identifier (`identity.py`) gives the 13 duplicates the same identifier, pinned in `tests/unit/test_sample_data.py`; absorption by the loader is open (B5) |
+| C4 | Implausible readings are flagged, kept, and excluded from summaries and alerts | open | The rules flag 580 readings, including all 7 zeros and 38 low humidity readings (`validation.py`, ADR-0011, `tests/unit/test_sample_data.py`); storing the flags (B5) and the exclusion (B6, B7) are open |
 | C5 | A batch log records every run, and lost connections are retried | open | |
 | C6 | Hourly and daily summaries carry reading counts and coverage | open | |
 | C7 | The latest valid value per sensor carries its measurement time | open | |

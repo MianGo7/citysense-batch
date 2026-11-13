@@ -266,3 +266,74 @@ millisecond, measured ad hoc before this item with the truncation fixed in
 ADR-0010, is not quoted anywhere and is pinned in the profile script in B4.
 
 Next: B4, the pure rules for identity, slicing and validation.
+
+---
+
+## 2026-11-13
+
+B4, the pure rules for identity, slicing and validation, was taken. The item
+requires the ranges and the jump limits to be proposed with measured counts
+before anything is implemented, so the data was analysed first. The analysis
+changed the picture. The 7 temperature zeros and the 38 low humidity readings
+that the concept names are a small part of a larger family of single readings
+that leave the level of their device and return at the next reading. With the
+adopted rules 580 of the 405,171 stored readings are flagged, so 535 lie beyond
+the two named groups. The sizes of the jumps are not spread evenly but cluster
+at distinct values, which are pinned and described in ADR-0011 without a claimed
+cause. One device shows none of it. The ranges, the limits of 3 degrees and 10
+percentage points, the re-baseline after two consecutive jump flags, the
+maximum age of 300 seconds for the reference and the failure on parse errors
+were approved, together with an order check per device that allows equal
+timestamps, because a strict check would fail the batch on the 13 duplicate
+rows.
+
+Several things went differently from the first expectation. Comparing each
+reading with the previous raw reading would flag a spike and the normal reading
+after it, which was concluded by reasoning and not simulated, so the reference
+became the last unflagged reading. That in turn can lock a device out once the
+level has changed, and a simulated run with a temperature limit of 10 produced
+46 consecutive flags behind a reference that was itself a glitch value. That run
+made the risk visible and led to the re-baseline. The re-baseline triggers twice on
+the sample, both times for a humidity rise that persisted, on 14 July at 21:00
+and on 16 July at 20:12, and the cost of two flagged readings per event is named
+in the ADR as the trade-off. A reading that repeats the identifier of the
+previous one had to be handled in the state as well, because otherwise two
+identical rows would count as two flags in the run before the re-baseline, but
+only one reading is stored.
+
+Two statements had to be corrected. In the proposal the sizes of the jumps were
+described as multiples of 6.4. The pinned classes contain a class at 3.2, which
+is half of 6.4, so the ADR says multiples of 3.2, and 349 of 350 temperature
+jumps and 306 of 319 humidity jumps lie within 0.4 of one. Furthermore, the
+first unit test that was meant to show why the identifier uses decimal
+arithmetic failed on its own premise: a float does give the right millisecond for
+three digit fractions at the magnitude of the sample, and the examples that
+had been assumed to fail do not. A search found texts with ten digits after the decimal
+point on which the float lands on the neighbouring millisecond, and the test uses
+those. The consequence is that the sample cannot demonstrate the benefit of the
+decimal conversion, which only the unit test does.
+
+Four checks were added because a pass at the first attempt proves little. Ten
+deliberate breaks of the rules, among them an exclusive bound, a limit that is
+inclusive, a reference that is updated by a flagged reading, a re-baseline after
+three flags, a missing repeat shortcut and a rounded float conversion, were each
+caught by at least one unit test, and the sources were restored afterwards. A
+unit test rebuilds the state at every cut of a synthetic sequence from the last
+valid reading and compares the flags with those of the uninterrupted run, which
+is the property that the loader of B5 depends on. All figures that the ADR
+quotes are pinned in `tests/unit/test_sample_data.py`, including the median
+intervals, the largest interval of 40.2 seconds that a comment in
+`validation.py` mentions and the two re-baseline events. The counts of the
+alternative limits 5 and 30 that were simulated beforehand are not quoted,
+because no script of the repository produces them, and the ADR quotes the 46
+and 196 jumps below those limits that follow from the pinned classes instead.
+
+The item touches neither the database nor the containers, so the integration
+tests were not run. 119 unit tests pass and ruff reports nothing. Open for B5:
+the loader has to rebuild the state of every device from the database before a
+batch, and `batches.py` is stricter than the order check that was asked for,
+because a reading from an earlier day than the batch in progress cannot be
+placed.
+
+Next: B5, the loader and its container.
+

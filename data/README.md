@@ -101,4 +101,5 @@ The 13 exact duplicates are also the 13 duplicates on device and timestamp.
 This matters for the identifier of a reading, which is built from device and
 timestamp: no two different readings collide on one identifier, so absorbing
 the duplicates loses nothing. The 7 temperature readings of 0.0 and the 38
-low humidity readings are the candidates for the plausibility rules of B4.
+low humidity readings are flagged by the plausibility rules of ADR-0011, which
+the unit tests pin.

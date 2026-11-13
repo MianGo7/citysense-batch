@@ -78,7 +78,7 @@ Documents to update: `requirements.md` (R2), `dev-journal.md`.
 
 ---
 
-## B4, pure rules: identity, slicing, validation. Open.
+## B4, pure rules: identity, slicing, validation. Done, 2026-11-13.
 
 `identity.py` builds the deterministic identifier from device and timestamp.
 `batches.py` reads the compressed CSV as a stream and yields one batch per
