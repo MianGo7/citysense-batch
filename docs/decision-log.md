@@ -240,3 +240,13 @@ One compatibility note belongs in the limits of the README (B9): MongoDB 5.0 and
 later require a processor with the AVX instruction set on x86 machines. The
 official image is published for several architectures, so it runs on x86 and on
 Apple silicon.
+
+Note added on 2026-11-13: the statement above that `mongo1` is the primary after
+a clean start held only some seconds after the setup service had finished,
+because another member sometimes wins the first election and `mongo1` takes over
+through its priority later. The service had exited as soon as any member was the
+primary, so a test that connects to the published port of `mongo1` failed now
+and then. The script `db/init-replica-set.js` now waits after the first
+initiation until `mongo1` itself is the primary, and a repeated start still
+accepts any primary, because `mongo1` may be taking over after a failure. The
+text of this entry is otherwise unchanged.

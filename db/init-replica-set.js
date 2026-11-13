@@ -29,29 +29,42 @@ function isInitiated() {
   }
 }
 
-function hasPrimary() {
+// With no host given, any member counts as the primary.
+function hasPrimary(host) {
   try {
-    return rs.status().members.some((member) => member.stateStr === "PRIMARY");
+    return rs
+      .status()
+      .members.some(
+        (member) => member.stateStr === "PRIMARY" && (host === undefined || member.name === host),
+      );
   } catch (error) {
     return false;
   }
 }
 
+let awaited;
 if (isInitiated()) {
   print(`Replica set ${REPLICA_SET} is already initiated, nothing to do.`);
 } else {
   print(`Initiating replica set ${REPLICA_SET}.`);
   rs.initiate({ _id: REPLICA_SET, members: MEMBERS });
+  // After the first initiation another member sometimes wins the first election,
+  // and mongo1 takes over only some seconds later through its priority. The
+  // published port belongs to mongo1, so the first start waits until it is the
+  // primary, and a clean start is in the same state every time. A repeated start
+  // accepts any primary, because mongo1 may be taking over after a failure.
+  awaited = MEMBERS[0].host;
 }
 
 // Services that depend on this one start against a writable replica set, also
 // after a restart of the stack, when an election may still be running.
 const deadline = Date.now() + WAIT_FOR_PRIMARY_MS;
-while (!hasPrimary()) {
+while (!hasPrimary(awaited)) {
   if (Date.now() > deadline) {
-    print(`No primary was elected within ${WAIT_FOR_PRIMARY_MS} ms.`);
+    const which = awaited ? ` ${awaited}` : "";
+    print(`No primary${which} was elected within ${WAIT_FOR_PRIMARY_MS} ms.`);
     quit(1);
   }
   sleep(500);
 }
-print(`Replica set ${REPLICA_SET} has a primary.`);
+print(`Replica set ${REPLICA_SET} has a primary${awaited ? `, ${awaited}` : ""}.`);
