@@ -7,6 +7,7 @@ real store is covered by the integration tests.
 """
 
 import logging
+from collections import defaultdict
 from datetime import UTC, datetime
 from functools import partial
 
@@ -19,9 +20,11 @@ from pymongo.errors import (
     WriteConcernError,
 )
 
+from citysense.aggregation import DAILY, HOURLY
 from citysense.batches import iter_batches
 from citysense.config import Settings
-from citysense.loader import EXIT_FAILED, EXIT_OK, RETRY_DELAYS, run, with_retries
+from citysense.loader import EXIT_FAILED, EXIT_OK, RETRY_DELAYS, with_retries
+from citysense.loader import run as run_loader
 from citysense.store import to_document, to_reading
 from citysense.validation import flag_readings
 
@@ -66,10 +69,63 @@ def scenario():
     return "\n".join([HEADER, *rows]) + "\n"
 
 
+class FakeDerived:
+    """The derived collections of `Derived`, kept as lists of counts and calls."""
+
+    def __init__(self, store):
+        self.store = store
+        self.counts = {HOURLY: defaultdict(dict), DAILY: defaultdict(dict)}
+        self.merges = []
+        self.latest_merges = []
+        self.status_during_merge = []
+        self.failures = []
+
+    def hour_counts(self, devices, start, end):
+        hours = {}
+        for document in self.store.readings.values():
+            if document["device"] in devices and start <= document["ts"] < end:
+                key = (
+                    document["device"],
+                    document["ts"].replace(minute=0, second=0, microsecond=0),
+                )
+                row = hours.setdefault(key, {"reading_count": 0, "last_ts": document["ts"]})
+                row["reading_count"] += 0 if document["quality"]["flags"] else 1
+                row["last_ts"] = max(row["last_ts"], document["ts"])
+        return [
+            {"_id": {"device": device, "period_start": hour}, **row}
+            for (device, hour), row in sorted(hours.items())
+        ]
+
+    def earlier_counts(self, collection, device, before):
+        periods = self.counts[collection][device]
+        return [periods[start] for start in sorted(periods) if start < before]
+
+    def merge_summaries(self, unit, devices, start, end, expected):
+        if self.failures:
+            raise self.failures.pop(0)
+        day = start.date().isoformat()
+        self.status_during_merge.append(self.store.runs[day]["status"])
+        self.merges.append((unit, day, dict(expected)))
+        rows = self.hour_counts(devices, start, end)
+        for row in rows:
+            device, hour = row["_id"]["device"], row["_id"]["period_start"]
+            if unit == "hour":
+                self.counts[HOURLY][device][hour] = row["reading_count"]
+        if unit == "day":
+            for device in devices:
+                self.counts[DAILY][device][start] = sum(
+                    row["reading_count"] for row in rows if row["_id"]["device"] == device
+                )
+
+    def merge_latest(self, devices, start, end):
+        self.latest_merges.append((start.date().isoformat(), list(devices)))
+
+
 class FakeStore:
     """The questions and writes of `Store`, answered from dictionaries."""
 
     def __init__(self):
+        self.derived = FakeDerived(self)
         self.readings = {}
         self.runs = {}
         self.insert_calls = 0
@@ -138,6 +194,10 @@ def expected(source):
     readings = [reading for batch in iter_batches(source) for reading in batch.readings]
     flags, _ = flag_readings(readings)
     return {reading.id: list(each) for reading, each in zip(readings, flags, strict=True)}
+
+
+def run(settings, store, **keywords):
+    return run_loader(settings, store, store.derived, **keywords)
 
 
 def settings_for(source, **changes):
@@ -439,3 +499,53 @@ def test_a_skipped_batch_is_logged_as_skipped(source, caplog):
     lines = [record.getMessage() for record in caplog.records]
     assert lines[0] == "batch 2020-07-12 skipped, already completed"
     assert lines[3].startswith("finished: 0 batches loaded, 3 skipped, read 0")
+
+
+# The derived collections.
+
+
+def test_the_summaries_and_the_latest_values_are_derived_inside_each_batch(source):
+    store = FakeStore()
+    run(settings_for(source), store, retry=no_wait())
+    derived = store.derived
+    assert [(unit, day) for unit, day, _ in derived.merges] == [
+        (unit, day) for day in sorted(store.runs) for unit in ("hour", "day")
+    ]
+    assert [day for day, _ in derived.latest_merges] == sorted(store.runs)
+    assert all(devices == [A, B] for _, devices in derived.latest_merges)
+    # The batch is still running while its summaries are written, so a failure
+    # there leaves it to be repeated and not completed without them.
+    assert set(derived.status_during_merge) == {"running"}
+
+
+def test_a_skipped_batch_derives_nothing(source):
+    store = FakeStore()
+    run(settings_for(source), store, retry=no_wait())
+    merges = len(store.derived.merges)
+    run(settings_for(source), store, retry=no_wait())
+    assert len(store.derived.merges) == merges
+
+
+def test_the_expected_counts_come_from_the_earlier_days_only(source):
+    store = FakeStore()
+    run(settings_for(source), store, retry=no_wait())
+    by_day = {(unit, day): expected for unit, day, expected in store.derived.merges}
+    # The first day has no hour that is complete and not the first of its device.
+    assert by_day[("hour", "2020-07-12")] == {A: None, B: None}
+    assert by_day[("day", "2020-07-12")] == {A: None, B: None}
+    # On the second day A has two earlier hours and drops the first, and B has one,
+    # which is its first hour and cannot give a baseline, nor can its own hour.
+    assert by_day[("hour", "2020-07-13")] == {A: 1.0, B: None}
+    assert by_day[("day", "2020-07-13")] == {A: 24.0, B: None}
+
+
+def test_a_batch_whose_derivation_fails_is_not_completed_and_is_derived_again(source):
+    store = FakeStore()
+    store.derived.failures = [OperationFailure("pipeline failed", 8)]
+    assert run(settings_for(source), store, retry=no_wait()) == EXIT_FAILED
+    failed = store.runs["2020-07-12"]
+    assert failed["status"] == "failed"
+    assert "pipeline failed" in failed["error"]
+    assert run(settings_for(source), store, retry=no_wait()) == EXIT_OK
+    assert store.runs["2020-07-12"]["attempts"] == 2
+    assert [day for day, _ in store.derived.latest_merges][0] == "2020-07-12"

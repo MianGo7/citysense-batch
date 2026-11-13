@@ -78,7 +78,9 @@ const SCHEMAS = {
     },
   },
 
-  // The statistics per metric are left open until B6 fixes their shape.
+  // The statistics per metric are an object per metric with minimum, maximum and
+  // mean over valid readings, see ADR-0013. A coverage or an expected count of
+  // null means that the device has no baseline yet.
   summaries_hourly: summarySchema(),
   summaries_daily: summarySchema(),
 
@@ -124,7 +126,11 @@ function summarySchema() {
       period_start: { bsonType: "date" },
       reading_count: { bsonType: INTEGER },
       flagged_count: { bsonType: INTEGER },
-      coverage: { bsonType: "number" },
+      coverage: { bsonType: ["number", "null"] },
+      expected_count: { bsonType: ["number", "null"] },
+      metrics: { bsonType: "object" },
+      light_true: { bsonType: INTEGER },
+      motion_true: { bsonType: INTEGER },
     },
   };
 }
@@ -178,6 +184,9 @@ for (const [name, schema] of Object.entries(SCHEMAS)) {
 // Serves the time range per device and the latest reading per device alike.
 applyIndex("readings", "device_ts", { device: 1, ts: -1 });
 applyIndex("readings", "ingested_at_ttl", { ingested_at: 1 }, RETENTION_SECONDS);
+// Serves the summaries of one device over a period, which is what a planner asks.
+applyIndex("summaries_hourly", "device_period", { device: 1, period_start: 1 });
+applyIndex("summaries_daily", "device_period", { device: 1, period_start: 1 });
 // Serves the open alerts per sensor.
 applyIndex("alerts", "status_type_device", { status: 1, type: 1, device: 1 });
 

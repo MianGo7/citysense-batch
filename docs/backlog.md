@@ -118,7 +118,7 @@ Documents to update: `requirements.md` (R3, R4, R6), `decision-log.md`,
 
 ---
 
-## B6, derived data. Open.
+## B6, derived data. Done, 2026-11-14.
 
 After each completed batch, aggregation pipelines with `$merge` recompute the
 hourly and daily summaries of the affected day and update `latest`. Summaries
@@ -142,6 +142,16 @@ silent alerts are raised from coverage, and a failed batch raises an alert of
 its own. One open alert exists per type, device and metric; while the
 condition persists it is updated, not repeated; it is resolved only after the
 condition has cleared for a full hour; alerts per device and day are capped.
+
+Evaluation horizon, decided with B6 (ADR-0013): threshold and sensor silent
+alerts are evaluated only for hours that end at or before the data horizon,
+which is the latest `ts` loaded across all devices. An hour after the horizon is
+still open and not silent. This removes the false alert for the partial last hour
+of the sample, 20 July 00:00, and is the usual watermark approach. A single
+device that goes silent while the others continue lies within the horizon and is
+detected. The partial day of 20 July is treated like the partial hour. An hour in
+which a device has no reading at all has no summary document, so the rule has to
+read a missing hour inside the horizon as a reading count of zero.
 
 Ask before: the thresholds. Propose them with the number of alerts each
 choice produces over the sample week.

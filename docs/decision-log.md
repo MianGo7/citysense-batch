@@ -599,3 +599,126 @@ line, so the cache is not revisited. Two limits remain. A write that is in fligh
 when the primary is killed is covered by the retries, but a reproducible
 demonstration with a real kill belongs to B8, and the count of a batch that was
 retried after a partial write is a count of the last attempt only.
+
+Note added on 2026-11-14 (B6): the two points that this entry leaves open are
+decided in ADR-0013. The summary collections receive the index `device_period`,
+and the statistics per metric take the shape that ADR-0013 describes. The
+validators of the summaries now allow a null coverage and a null expected count,
+because a device without a baseline has neither. The text of this entry is
+otherwise unchanged.
+
+---
+
+## ADR-0013, the summaries, the coverage and the latest values. 2026-11-13, accepted.
+
+The hourly and daily summaries and the latest value of every device are derived
+by aggregation pipelines that end in `$merge`, so that the database does the work
+next to the data and the loader reads only a few counts. They run inside the
+batch, after the readings of the day are stored and before the batch is marked as
+completed. Running them after the completion was rejected, because a failure
+there would leave a completed batch without summaries, and the rerun skips
+completed batches, so nothing would repair it. Inside the batch a failure leaves
+the batch running, and the next run repeats the writes of the readings, which
+change nothing, and the pipelines, which replace their documents by identical
+ones. The pipelines select by device and time range, so that the index
+`device_ts` serves them, and not by the field `batch`, which has no index.
+
+A summary is keyed by `{device, period_start}` as fixed in ADR-0010 and carries
+`reading_count`, which is the number of valid readings, `flagged_count`,
+`expected_count`, `coverage`, an object `metrics` with `min`, `max` and `mean` for
+each of the metrics `co`, `humidity`, `lpg`, `smoke` and `temp`, and the counts
+`light_true` and `motion_true` for the two boolean metrics. Minimum, maximum and
+mean are taken over valid readings only, so the value of a flagged reading cannot
+reach a statistic, and the counts of the hourly summaries add up to the 404,591
+valid readings of the sample, with 580 flagged, which an integration test checks
+per hour and per day against the readings themselves. A mean of the booleans was
+rejected in favour of a count, because a count of readings in which motion was
+detected is what a planner can interpret. An hour in which every reading is
+flagged still gets a document, with a count of zero and null statistics, so that
+a fully flagged hour can be told apart from a silent one. An hour without any
+reading gets no document, so the alert rules of B7 have to read a missing hour as
+a count of zero. The daily summary is computed from the readings of the day and
+not from the hourly means, because a mean of means is wrong whenever the hours
+hold different numbers of readings. The readings are sorted before they are
+grouped, so that the floating point sum of a mean is formed in the same order on
+every run and a rerun does not change the last digits.
+
+The coverage of a period is its reading count divided by its expected count. The
+expected count of an hour is the median `reading_count` of the full hours of the
+device before the batch day. The earlier hourly summaries of the device are taken
+in time order and the first one is dropped, because a device starts to report at
+an arbitrary moment and its first hour is therefore partial. A device without
+earlier hours takes the baseline from the hours of the day itself, again without
+its first hour, and only from hours that end at or before the newest reading of
+the batch, because the later ones are cut short by the end of the data. A device
+that has no such hour has no baseline, and its expected count and coverage are
+null. The expected count of a day is the median of the earlier daily counts
+without the first one, and a device with fewer days takes 24 times its expected
+hourly count, so that the first days have a baseline as well. A rerun of a day
+depends only on the earlier days, so it yields the same expected count however
+many days follow, and the first day bootstraps itself from its own full hours.
+
+The rejected alternative is to divide an hour by the median interval between the
+valid readings of the device, which is what the backlog suggested first. The
+intervals of two devices have a long tail of gaps, so their mean lies above their
+median, 6.20 against 5.43 seconds for the device `00:0f:00:70:91:0a` and 6.54
+against 5.42 seconds for `1c:bf:ce:15:ec:4d`, and healthy hours fall below the
+expectation. Among the 191 full hours of each device, 7 hours of the first and 59
+hours of the second lie below a coverage of 0.8 by this definition, against none
+by the median of the hourly counts, and the third device, whose intervals have no
+tail, has none by either. A coverage of 0.8 for a healthy device would be
+mistaken for data loss by the planners and would make every threshold on the
+coverage depend on the device. The mean interval, or a mean of the hourly counts,
+was rejected as well, because an outage lowers a mean and therefore lowers the
+expectation by which the outage is judged, so that the outage hides itself,
+whereas the median does not move for a few hours. A unit test shows that ten hours
+of outage lower a mean of 110 hourly counts below 530 and leave the median at 580.
+With the chosen definition the coverage of the full hours of the sample lies
+between 0.893 and 1.104 for `00:0f:00:70:91:0a`, between 0.835 and 1.213 for
+`1c:bf:ce:15:ec:4d` and between 0.996 and 1.001 for `b8:27:eb:bf:9d:51`, as an
+integration test pins.
+
+The definition has limits that are stated here. A device that degrades slowly
+over many weeks lowers its own baseline, so the coverage detects outages and not
+gradual drift, and the baseline would have to be fixed to a reference period to
+detect drift. An hour without a reading is absent from the summaries and
+therefore from the baseline, which does not matter for the median as long as
+fewer than half of the hours are missing. The first hour of a device is dropped
+even if the device started exactly on the hour. A batch day is taken as complete
+once it is loaded, and a completed batch is skipped, so a day that arrives in two
+parts cannot be extended. The last day of the sample is such a case, it ends at
+00:03:37 on 20 July, so its summaries report the plain figures, a coverage below
+0.07 for the last hour of each device and below 0.01 for the last day, as
+integration tests pin.
+
+The consequence for B7 is the evaluation horizon, which is the latest `ts` loaded
+across all devices. Threshold and sensor silent alerts are evaluated only for
+hours that end at or before the horizon, and a later hour is still open and not
+silent. This removes the false alert for the partial last hour, and the partial
+day of 20 July is treated in the same way. It is the usual watermark approach. A
+single device that goes silent while the others continue lies within the horizon
+and is still detected. The rule is written into B7 of the backlog.
+
+The latest value of a device is the newest valid reading of the batch, as a
+document with the measurement time `ts`, the identifier of the reading as
+`reading_id`, its batch and its metrics. It replaces the stored document only if
+its time is not older, so loading an earlier day again can never move the latest
+value backwards, which an integration test shows by repeating the second day
+after all days are loaded. A device whose readings of a day are all flagged keeps
+its earlier latest value. Replacing unconditionally was rejected for the reason
+just given, and comparing in the loader was rejected, because the check and the
+write would then be two operations that another run could interleave.
+
+Both summary collections receive an index `device_period` on the device and the
+period start, which ADR-0010 left open. It serves the query of a planner for one
+device over a stretch of time, and an `explain` test shows that the plan uses it
+and bounds both fields. The sample holds only 579 hourly and 27 daily summaries,
+so the index is design and not yet a necessity. Its cost is small, because the
+summaries are written once per batch, and a scan of every summary would grow with
+every month of the feed, whereas the summaries are kept permanently. Omitting the
+index was rejected for that reason. The validators accept a null coverage and a
+null expected count, and require every other field to have its type.
+
+With the derivation, the loader reported 21.3 seconds for the first load from
+clean volumes in one run, against 16.8 and 18.6 seconds before, so the derivation
+adds a few tenths of a second per batch.

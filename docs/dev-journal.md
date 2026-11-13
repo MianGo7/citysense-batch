@@ -418,3 +418,71 @@ a directory of the session, to make sure that it does not depend on files that a
 untracked. The README and the demonstration of a restart come with B8 and B9.
 
 Next: B6, derived data, after the commit of B5.
+
+## 2026-11-13 to 2026-11-14
+
+B6, the derived data, was taken after the proposal had been approved with the
+coverage definition fixed in advance: the expected count is the median reading
+count of the device's full hours before the batch day. The proposal was based on
+a measurement made for the purpose, which compared two definitions of the expected
+count on the stored data. The first divides an hour by the median interval, and
+the second takes the median of the hourly counts. That measurement was a script in
+the scratch directory of the session, so the figures were moved into
+`scripts/profile_data.py` and pinned in `tests/unit/test_sample_data.py` before
+ADR-0013 quotes them: 7 and 59 healthy hours below a coverage of 0.8 for two
+devices by the median interval, and none by the median of the hourly counts.
+
+The implementation is `aggregation.py`, three pipelines that end in `$merge`, and
+a step in the loader that runs them inside the batch, before the batch is marked
+as completed. The step reads the hourly counts of the day first, because a device
+that has no earlier hours takes its baseline from its own full hours, and the
+pipelines then receive the expected counts as constants. On the sample the stack
+holds 579 hourly summaries, 27 daily summaries and three latest documents, the
+hourly counts add up to 404,591 valid readings and 580 flagged ones, and the full
+load takes 21.3 seconds in one run, which is a few tenths of a second per batch
+more than before.
+
+Several things needed a decision that the approval did not cover, and are recorded
+in ADR-0013. A summary stores its `expected_count` next to the `coverage`, so that
+the basis of the figure can be read and tested. The coverage and the expected count
+are null for a device without a baseline, which required the validators to allow
+null for these two fields. The first hour of every device is dropped from its own
+baseline, because it is partial by construction, and the daily baseline falls back
+on 24 times the hourly one for the first days, because a median of one earlier day
+does not exist. The pipelines select by device and time and not by the field
+`batch`, because only the former has an index. The readings are sorted before they
+are grouped, so that the mean is summed in the same order on every run, since the
+summaries have to be identical after a rerun.
+
+The checks found two weak spots. A deliberate break of the lower bound of the
+baseline query, from strictly before to before or equal, passed the first unit and
+loader tests, because the query is only run against the database, and it was
+caught only after a test of the earlier counts against the real collection was
+added. The sample has no hour in which every reading is flagged and no silent hour,
+so these cases are tested on readings made for the purpose in
+`tests/integration/test_derived.py`, which includes the null statistics, the absence
+of a document for an empty hour and the replacement of a summary when its readings
+change. Seven deliberate breaks are caught: removing the guard on the latest value,
+letting flagged values into the statistics, not counting flagged readings, keeping
+the first hour in the baseline, replacing the median by the mean, running the
+derivation after the completion and not at all. A scratch script named `inspect.py` shadowed the standard library module of the
+same name, failed with a circular import and cost a few minutes.
+
+One run of the whole integration suite failed with 17 failures and 16 errors
+shortly after a clean start, among them the tests of `test_derived.py`, which pass
+when run alone. Only the end of its output was kept, so the messages were lost and
+the cause is not established. The suite was run twice more, once on the same stack
+and once after another clean start, and passed completely both times, 98 tests in 6
+and in 8 minutes. The tests connect directly to `mongo1`, so a change of the
+primary during a run would explain such a burst, but this is a conjecture, and the
+failure is recorded as unexplained. The runs of the suite now keep their full output.
+
+The evaluation horizon for B7 was decided together with the approval and is written
+into the backlog item. The last hour of the sample holds 36, 32 and 60 readings, so
+its coverage is below 0.07, which would be a false sensor silent alert without that
+rule. The summaries report the plain figure, and the alert rule leaves such an hour
+out. Open for B7: an hour without any reading has no document, so the rule must read
+it as a count of zero.
+
+Next: B7, the alerts, which needs a proposal of the thresholds with measured counts
+before anything is implemented.

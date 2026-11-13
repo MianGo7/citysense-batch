@@ -121,6 +121,44 @@ def test_readings_expire_on_the_ingestion_time_after_the_default_retention(datab
     assert index["expireAfterSeconds"] == DEFAULT_RETENTION_DAYS * SECONDS_PER_DAY
 
 
+@pytest.mark.parametrize("collection", ["summaries_hourly", "summaries_daily"])
+def test_summaries_have_an_index_on_device_and_period(database, collection):
+    index = indexes(database, collection)["device_period"]
+    assert list(index["key"].items()) == [("device", 1), ("period_start", 1)]
+
+
+def stages(plan):
+    """Every stage of an explained plan, from the winning one down to the scans."""
+    yield plan
+    if "inputStage" in plan:
+        yield from stages(plan["inputStage"])
+    for child in plan.get("inputStages", []):
+        yield from stages(child)
+
+
+@pytest.mark.parametrize("collection", ["summaries_hourly", "summaries_daily"])
+def test_the_period_query_of_a_planner_uses_the_index_and_reads_no_other_device(
+    database, collection
+):
+    # The query of the urban planner: one device over a stretch of time. The explain
+    # runs on the loaded data of the stack, and the plan has to bound both fields.
+    explained = (
+        database[collection]
+        .find(
+            {
+                "device": "b8:27:eb:bf:9d:51",
+                "period_start": {"$gte": datetime(2020, 7, 14, tzinfo=UTC)},
+            }
+        )
+        .explain()
+    )
+    scans = [s for s in stages(explained["queryPlanner"]["winningPlan"]) if s["stage"] == "IXSCAN"]
+    assert [scan["indexName"] for scan in scans] == ["device_period"]
+    bounds = scans[0]["indexBounds"]
+    assert bounds["device"] == ['["b8:27:eb:bf:9d:51", "b8:27:eb:bf:9d:51"]']
+    assert bounds["period_start"][0].startswith("[new Date(1594684800000)")
+
+
 @pytest.mark.parametrize("collection", sorted(COLLECTIONS - {"readings"}))
 def test_only_raw_readings_expire(database, collection):
     # Summaries are kept permanently, so no other collection carries a TTL index.
@@ -193,6 +231,46 @@ def test_the_derived_collections_accept_their_keys(database, cleanup):
         {"_id": "1999-01-01", "status": "running", "attempts": 1, "started_at": period_start}
     )
     database.alerts.insert_one({"type": "batch_failed", "status": "open", "source": TEST_DEVICE})
+
+
+def summary(**changes):
+    period_start = datetime(2020, 7, 12, tzinfo=UTC)
+    document = {
+        "_id": {"device": TEST_DEVICE, "period_start": period_start},
+        "device": TEST_DEVICE,
+        "period_start": period_start,
+        "reading_count": 0,
+        "flagged_count": 2,
+        "coverage": None,
+        "expected_count": None,
+        "metrics": {"temp": {"min": None, "max": None, "mean": None}},
+        "light_true": 0,
+        "motion_true": 0,
+    }
+    document.update(changes)
+    return document
+
+
+def test_a_summary_without_a_baseline_has_a_null_coverage_and_null_statistics(database, cleanup):
+    # An hour in which every reading is flagged, of a device that has no baseline yet.
+    document = summary()
+    assert database.summaries_hourly.insert_one(document).inserted_id == document["_id"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param({"coverage": "0.5"}, id="coverage as text"),
+        pytest.param({"expected_count": "576"}, id="expected count as text"),
+        pytest.param({"metrics": [1, 2]}, id="statistics that are not an object"),
+        pytest.param({"light_true": 1.5}, id="count of true readings that is not whole"),
+        pytest.param({"reading_count": None}, id="reading count that is null"),
+    ],
+)
+def test_a_malformed_summary_is_rejected(database, cleanup, change):
+    with pytest.raises(WriteError) as failure:
+        database.summaries_hourly.insert_one(summary(**change))
+    assert failure.value.code == DOCUMENT_VALIDATION_FAILURE
 
 
 @pytest.mark.parametrize(

@@ -16,7 +16,7 @@ uninterrupted run, however far the interrupted attempt got.
 import logging
 import time
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 
 from pymongo.errors import (
@@ -27,6 +27,7 @@ from pymongo.errors import (
     WriteConcernError,
 )
 
+from citysense.aggregation import DAILY, HOURLY, expected_counts
 from citysense.batches import SourceError, iter_batches
 from citysense.store import day_start, to_document
 from citysense.validation import DeviceState, flag_readings
@@ -79,7 +80,34 @@ def rebuild_states(store, devices, before, retry):
     return states
 
 
-def load_batch(store, batch, chunk_size, retry=with_retries, clock=time.monotonic):
+def derive_batch(derived, batch, retry):
+    """Compute the summaries of the day and the latest values of its devices.
+
+    The expected counts are read first, because the baseline of a device comes
+    from its earlier summaries, and the pipelines then write the summaries and
+    `latest`. Every step can be repeated, so this runs inside the batch, before
+    the batch is marked as completed. Run after the completion, a failure here
+    would leave a completed batch without summaries that no rerun would repair.
+    """
+    devices = sorted({reading.device for reading in batch.readings})
+    start = day_start(batch.day)
+    end = day_start(batch.day + timedelta(days=1))
+
+    rows = retry(partial(derived.hour_counts, devices, start, end))
+    earlier_hours = {
+        device: retry(partial(derived.earlier_counts, HOURLY, device, start)) for device in devices
+    }
+    earlier_days = {
+        device: retry(partial(derived.earlier_counts, DAILY, device, start)) for device in devices
+    }
+    hourly, daily = expected_counts(devices, rows, earlier_hours, earlier_days)
+
+    retry(partial(derived.merge_summaries, "hour", devices, start, end, hourly))
+    retry(partial(derived.merge_summaries, "day", devices, start, end, daily))
+    retry(partial(derived.merge_latest, devices, start, end))
+
+
+def load_batch(store, derived, batch, chunk_size, retry=with_retries, clock=time.monotonic):
     """Load one batch and return its counts.
 
     The counts are those of this attempt. After an interrupted attempt, the
@@ -116,6 +144,7 @@ def load_batch(store, batch, chunk_size, retry=with_retries, clock=time.monotoni
         "already_present": already_present,
         "flagged": flagged,
     }
+    derive_batch(derived, batch, retry)
     retry(partial(store.complete_batch_run, key, counts, datetime.now(UTC)))
     return counts
 
@@ -148,7 +177,7 @@ def _log_totals(outcome, totals, loaded, skipped, began, clock):
     )
 
 
-def run(settings, store, retry=with_retries, clock=time.monotonic):
+def run(settings, store, derived, retry=with_retries, clock=time.monotonic):
     """Process the batches of the source and return the exit code of the process.
 
     The code is 0 when every batch is completed or was skipped as completed, and 1
@@ -167,7 +196,7 @@ def run(settings, store, retry=with_retries, clock=time.monotonic):
                     skipped += 1
                     LOG.info("batch %s skipped, already completed", batch.key)
                     continue
-                counts = load_batch(store, batch, settings.chunk_size, retry, clock)
+                counts = load_batch(store, derived, batch, settings.chunk_size, retry, clock)
             except PyMongoError as error:
                 LOG.error("batch %s failed: %s", batch.key, _error_text(error))
                 _mark_failed(store, batch.key, error, retry)

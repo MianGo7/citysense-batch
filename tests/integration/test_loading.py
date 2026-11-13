@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from pymongo import MongoClient
 
+from citysense.aggregation import Derived
 from citysense.batches import Reading
 from citysense.config import Settings
 from citysense.loader import EXIT_OK, run
@@ -79,12 +80,51 @@ def flags_of(database):
     }
 
 
+DERIVED = ("summaries_hourly", "summaries_daily", "latest")
+HOURLY_SUMMARIES = 579
+DAILY_SUMMARIES = 27
+DEVICES = ("00:0f:00:70:91:0a", "1c:bf:ce:15:ec:4d", "b8:27:eb:bf:9d:51")
+VALID_READINGS = STORED_READINGS - FLAGGED_READINGS
+
+
+def snapshot(database):
+    """The derived collections as dictionaries, to compare them for equality."""
+    return {name: {repr(d["_id"]): d for d in database[name].find()} for name in DERIVED}
+
+
+def valid_and_flagged_per_period(database, unit):
+    """The counts that the summaries must reproduce, taken from the readings themselves."""
+    pipeline = [
+        {
+            "$group": {
+                "_id": {
+                    "device": "$device",
+                    "start": {"$dateTrunc": {"date": "$ts", "unit": unit}},
+                },
+                "valid": {"$sum": {"$cond": [{"$eq": [{"$size": "$quality.flags"}, 0]}, 1, 0]}},
+                "flagged": {"$sum": {"$cond": [{"$gt": [{"$size": "$quality.flags"}, 0]}, 1, 0]}},
+            }
+        }
+    ]
+    return {
+        (row["_id"]["device"], row["_id"]["start"]): (row["valid"], row["flagged"])
+        for row in database.readings.aggregate(pipeline, allowDiskUse=True)
+    }
+
+
+def counts_in(database, collection):
+    return {
+        (d["device"], d["period_start"]): (d["reading_count"], d["flagged_count"])
+        for d in database[collection].find()
+    }
+
+
 def load(database_name, **changes):
     """Run the loader in this process against a database of the replica set."""
     settings = Settings(uri=URI, database=database_name, source=SOURCE, **changes)
     client = connect(URI)
     try:
-        return run(settings, Store(client[database_name]))
+        return run(settings, Store(client[database_name]), Derived(client[database_name]))
     finally:
         client.close()
 
@@ -330,3 +370,122 @@ def test_the_rule_state_is_the_last_valid_reading_before_the_batch_and_its_jump_
     )
     assert store.rule_state("b", day) == (None, 0)
     assert store.rule_state("unknown", day) == (None, 0)
+
+
+# The derived collections of the stack and of an uninterrupted load.
+
+
+@pytest.fixture(params=["stack", "scratch"])
+def loaded(request, client, reference):
+    return client[DATABASE] if request.param == "stack" else reference
+
+
+def test_the_derived_collections_hold_one_document_per_device_and_period(loaded):
+    assert loaded.summaries_hourly.count_documents({}) == HOURLY_SUMMARIES
+    assert loaded.summaries_daily.count_documents({}) == DAILY_SUMMARIES
+    assert sorted(document["_id"] for document in loaded.latest.find()) == sorted(DEVICES)
+
+
+def test_the_hourly_reading_counts_add_up_to_the_valid_readings(loaded):
+    hourly = list(loaded.summaries_hourly.find())
+    assert sum(document["reading_count"] for document in hourly) == VALID_READINGS
+    assert sum(document["flagged_count"] for document in hourly) == FLAGGED_READINGS
+    assert loaded.readings.count_documents({"quality.flags": {"$size": 0}}) == VALID_READINGS
+
+
+def test_every_hourly_and_daily_count_equals_the_count_of_its_readings(loaded):
+    assert counts_in(loaded, "summaries_hourly") == valid_and_flagged_per_period(loaded, "hour")
+    assert counts_in(loaded, "summaries_daily") == valid_and_flagged_per_period(loaded, "day")
+
+
+def test_the_daily_counts_add_up_to_the_hourly_counts(loaded):
+    for collection in ("summaries_hourly", "summaries_daily"):
+        assert sum(d["reading_count"] for d in loaded[collection].find()) == VALID_READINGS
+
+
+def test_latest_is_the_newest_valid_reading_of_each_device(loaded):
+    for device in DEVICES:
+        newest = loaded.readings.find_one(
+            {"device": device, "quality.flags": {"$size": 0}}, sort=[("ts", -1)]
+        )
+        document = loaded.latest.find_one({"_id": device})
+        assert document["ts"] == newest["ts"]
+        assert document["reading_id"] == newest["_id"]
+        assert document["temp"] == newest["temp"]
+        assert document["batch"] == "2020-07-20"
+
+
+def test_the_coverage_of_a_full_hour_stays_near_one_for_every_device(loaded):
+    # The measured range of the coverage over the 191 full hours of each device,
+    # which is the evidence for the choice of the baseline in ADR-0013.
+    ranges = {}
+    for device in DEVICES:
+        hours = list(loaded.summaries_hourly.find({"device": device}).sort("period_start", 1))
+        coverage = [document["coverage"] for document in hours[1:-1]]
+        assert len(coverage) == 191
+        ranges[device] = (min(coverage), max(coverage))
+    assert ranges["00:0f:00:70:91:0a"] == pytest.approx((0.893, 1.104), abs=0.0005)
+    assert ranges["1c:bf:ce:15:ec:4d"] == pytest.approx((0.835, 1.213), abs=0.0005)
+    assert ranges["b8:27:eb:bf:9d:51"] == pytest.approx((0.996, 1.001), abs=0.0005)
+
+
+def test_the_last_hour_of_the_sample_is_partial_and_its_coverage_is_low(loaded):
+    # The data ends at 00:03:37 on 20 July, so the last hour holds a few minutes.
+    # The alert rules of B7 leave such an hour out, because it ends after the
+    # newest reading, and the summary reports the plain figure.
+    last = {
+        device: loaded.summaries_hourly.find_one({"device": device}, sort=[("period_start", -1)])
+        for device in DEVICES
+    }
+    assert {device: document["reading_count"] for device, document in last.items()} == {
+        "00:0f:00:70:91:0a": 36,
+        "1c:bf:ce:15:ec:4d": 32,
+        "b8:27:eb:bf:9d:51": 60,
+    }
+    assert all(document["coverage"] < 0.07 for document in last.values())
+    assert {d["period_start"] for d in last.values()} == {datetime(2020, 7, 20, tzinfo=UTC)}
+    # The partial day of 20 July is treated in the same way, so its daily coverage
+    # is the plain figure as well.
+    days = list(loaded.summaries_daily.find({"period_start": datetime(2020, 7, 20, tzinfo=UTC)}))
+    assert sorted(day["reading_count"] for day in days) == [32, 36, 60]
+    assert all(day["coverage"] < 0.01 for day in days)
+
+
+def test_the_first_day_takes_its_baseline_from_its_own_full_hours(loaded):
+    first = loaded.summaries_hourly.find_one({"device": DEVICES[2]}, sort=[("period_start", 1)])
+    second = loaded.summaries_hourly.find({"device": DEVICES[2]}).sort("period_start", 1)[1]
+    assert first["expected_count"] == second["expected_count"] == 976.0
+    day = loaded.summaries_daily.find_one({"device": DEVICES[2]}, sort=[("period_start", 1)])
+    assert day["expected_count"] == 976.0 * 24
+
+
+def test_rerunning_every_batch_leaves_the_derived_collections_unchanged(client, scratch):
+    name = scratch()
+    assert load(name) == EXIT_OK
+    before = snapshot(client[name])
+    client[name].batch_runs.delete_many({})
+    assert load(name) == EXIT_OK
+    assert snapshot(client[name]) == before
+
+
+def test_rerunning_an_early_day_changes_neither_the_summaries_nor_latest(client, scratch):
+    # The sentinel of the guard on `latest`: the early day contains valid readings
+    # that are older than the stored ones, and it must not move the latest value back.
+    name = scratch()
+    assert load(name) == EXIT_OK
+    database = client[name]
+    before = snapshot(database)
+    newest = {document["_id"]: document["ts"] for document in database.latest.find()}
+    assert newest == {
+        "00:0f:00:70:91:0a": datetime(2020, 7, 20, 0, 3, 36, 979000, tzinfo=UTC),
+        "1c:bf:ce:15:ec:4d": datetime(2020, 7, 20, 0, 3, 36, 167000, tzinfo=UTC),
+        "b8:27:eb:bf:9d:51": datetime(2020, 7, 20, 0, 3, 37, 264000, tzinfo=UTC),
+    }
+
+    database.batch_runs.delete_one({"_id": "2020-07-13"})
+    assert load(name) == EXIT_OK
+
+    repeated = database.batch_runs.find_one({"_id": "2020-07-13"})
+    assert (repeated["status"], repeated["counts"]["inserted"]) == ("completed", 0)
+    assert {document["_id"]: document["ts"] for document in database.latest.find()} == newest
+    assert snapshot(database) == before

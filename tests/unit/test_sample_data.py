@@ -252,3 +252,47 @@ def test_limits_of_5_and_30_would_let_the_small_spike_classes_through(flags):
     humidity = flags["jump_sizes"]["humidity"]
     assert sum(count for size, count in temperature.items() if size <= 5.0) == 46
     assert sum(count for size, count in humidity.items() if size <= 30.0) == 196
+
+
+# The two definitions of coverage that ADR-0013 compares.
+
+
+@pytest.fixture(scope="module")
+def coverage(profile_module):
+    return profile_module.coverage_alternatives(DATA_FILE)
+
+
+def test_every_device_has_191_full_hours(coverage):
+    # 193 hourly summaries per device, without the first and the last hour.
+    assert {device: each["full_hours"] for device, each in coverage.items()} == {
+        "00:0f:00:70:91:0a": 191,
+        "1c:bf:ce:15:ec:4d": 191,
+        "b8:27:eb:bf:9d:51": 191,
+    }
+
+
+def test_the_median_and_mean_intervals_of_the_valid_readings(coverage):
+    # The long tail of gaps of the first two devices lifts the mean above the median.
+    seconds = {
+        device: (each["median_interval_s"], each["mean_interval_s"])
+        for device, each in coverage.items()
+    }
+    assert seconds["00:0f:00:70:91:0a"] == pytest.approx((5.43, 6.20), abs=0.005)
+    assert seconds["1c:bf:ce:15:ec:4d"] == pytest.approx((5.42, 6.54), abs=0.005)
+    assert seconds["b8:27:eb:bf:9d:51"] == pytest.approx((3.69, 3.69), abs=0.005)
+
+
+def test_the_median_interval_puts_healthy_hours_below_a_coverage_of_0_8(coverage):
+    assert {device: each["below_limit_by_interval"] for device, each in coverage.items()} == {
+        "00:0f:00:70:91:0a": 7,
+        "1c:bf:ce:15:ec:4d": 59,
+        "b8:27:eb:bf:9d:51": 0,
+    }
+
+
+def test_the_median_hourly_count_puts_no_healthy_hour_below_a_coverage_of_0_8(coverage):
+    assert {device: each["below_limit_by_hourly_median"] for device, each in coverage.items()} == {
+        "00:0f:00:70:91:0a": 0,
+        "1c:bf:ce:15:ec:4d": 0,
+        "b8:27:eb:bf:9d:51": 0,
+    }

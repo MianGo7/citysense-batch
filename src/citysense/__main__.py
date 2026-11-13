@@ -3,6 +3,7 @@
 import logging
 import sys
 
+from citysense.aggregation import Derived
 from citysense.config import ConfigError, Settings
 from citysense.loader import run
 from citysense.store import Store, connect
@@ -24,7 +25,8 @@ def main():
 
     client = connect(settings.uri)
     try:
-        return run(settings, Store(client[settings.database]))
+        database = client[settings.database]
+        return run(settings, Store(database), Derived(database))
     finally:
         client.close()
 

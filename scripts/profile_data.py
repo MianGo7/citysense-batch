@@ -218,6 +218,73 @@ def jumps_near_multiples(jump_sizes, step=SIZE_STEP, tolerance=SIZE_TOLERANCE):
     return result
 
 
+MILLISECONDS_PER_HOUR = 3_600_000
+# A healthy hour below this share of its expected count is the example that
+# separates the definitions of coverage in ADR-0013.
+COVERAGE_LIMIT = 0.8
+
+
+def coverage_alternatives(path=DEFAULT_PATH):
+    """Compare two definitions of the expected count of an hour, per device.
+
+    The first divides an hour by the median interval between valid readings, the
+    second takes the median of the hourly counts of the device itself. Over the
+    full hours of the sample, which exclude the first and the last hour of each
+    device, a healthy device should stay near 1. The figures show why ADR-0013
+    rejects the first definition: the intervals have a long tail of gaps, so their
+    mean lies above their median and healthy hours fall below the expectation.
+    """
+    states = {}
+    seen = set()
+    stamps = {}
+    for batch in iter_batches(path):
+        for reading in batch.readings:
+            result = check_reading(reading, states.get(reading.device, DeviceState()))
+            states[reading.device] = result.state
+            if reading.id in seen:
+                continue
+            seen.add(reading.id)
+            if not result.flags:
+                stamps.setdefault(reading.device, []).append(reading.ms)
+
+    figures = {}
+    for device, moments in sorted(stamps.items()):
+        gaps = [
+            after - before
+            for before, after in zip(moments, moments[1:], strict=False)
+            if after > before
+        ]
+        hourly = Counter(moment // MILLISECONDS_PER_HOUR for moment in moments)
+        full_hours = [hourly[hour] for hour in sorted(hourly)][1:-1]
+        by_interval = MILLISECONDS_PER_HOUR / statistics.median(gaps)
+        by_hourly_median = statistics.median(full_hours)
+        figures[device] = {
+            "median_interval_s": statistics.median(gaps) / 1000,
+            "mean_interval_s": statistics.fmean(gaps) / 1000,
+            "full_hours": len(full_hours),
+            "below_limit_by_interval": sum(
+                1 for n in full_hours if n / by_interval < COVERAGE_LIMIT
+            ),
+            "below_limit_by_hourly_median": sum(
+                1 for n in full_hours if n / by_hourly_median < COVERAGE_LIMIT
+            ),
+        }
+    return figures
+
+
+def render_coverage(figures):
+    """Format the comparison of the definitions of coverage as plain text lines."""
+    lines = [f"hours below a coverage of {COVERAGE_LIMIT:g} among the full hours of each device:"]
+    for device, each in figures.items():
+        lines.append(
+            f"  {device}: {each['full_hours']} full hours, median interval "
+            f"{each['median_interval_s']:.2f} s, mean interval {each['mean_interval_s']:.2f} s, "
+            f"below by the median interval {each['below_limit_by_interval']}, "
+            f"below by the median hourly count {each['below_limit_by_hourly_median']}"
+        )
+    return "\n".join(lines)
+
+
 def render(facts):
     """Format the facts as plain text lines for the terminal and for the README."""
     lines = [
@@ -287,6 +354,8 @@ def main(argv):
     print(render(profile(path)))
     print()
     print(render_flags(flag_statistics(path)))
+    print()
+    print(render_coverage(coverage_alternatives(path)))
 
 
 if __name__ == "__main__":
