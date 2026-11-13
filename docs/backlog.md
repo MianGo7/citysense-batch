@@ -62,7 +62,7 @@ Documents to update: `decision-log.md`, `requirements.md` (R1),
 
 ---
 
-## B3, database setup script. Open.
+## B3, database setup script. Done, 2026-11-13.
 
 An idempotent setup script run by `mongo-setup` after initiation. It creates
 the collections from `docs/concept.md` with `$jsonSchema` validators that

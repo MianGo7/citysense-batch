@@ -186,3 +186,83 @@ in the graceful case. That case is left to B5 and B8, and it is the reason the
 loader needs retries with a backoff that is longer than the election timeout.
 
 Next: B3, the database setup script.
+
+---
+
+## 2026-11-13
+
+B3, the database setup script, was taken. The item defines the data model, so
+the shape of every collection was put to the student first, and the answer
+fixed more than had been proposed: the identifier of a reading as the string
+`<device>|<epoch milliseconds>` with truncated milliseconds, `quality.flags` as
+a required array that may be empty, the object `{device, period_start}` as the
+identifier of the summaries, the device and the UTC day as the identifiers of
+`latest` and `batch_runs`, and a required `source` on alerts. The alert type
+that had been proposed as `threshold_exceeded` became `threshold`. All of it is
+recorded in ADR-0010, and a short note under ADR-0007 points to the field
+`source` that replaces "its source device", without editing the entry itself.
+
+`db/setup-database.js` runs as the second call of `mongo-setup`, through the
+replica set URI, so that it reaches the primary. It creates the six collections
+with strict validators that allow additional fields, creates the three indexes
+of the concept and applies the retention from `RETENTION_DAYS`. A second run
+updates the validators and changes nothing else, and a changed retention is
+applied to the existing TTL index through `collMod`. The integration tests in
+`tests/integration/test_database.py` cover the collections and indexes, the
+acceptance of a reading with unknown extra metrics, the rejection of a reading
+without a device and of the malformed variants of every rule, the repeated
+setup, the configurable and the invalid retention, and the expiry. With the
+tests of B2, 38 integration tests and 14 unit tests pass, and ruff reports
+nothing.
+
+C10 is demonstrated in this item and not left open. The test inserts a reading
+whose ingestion time lies 400 days in the past and a reading with a current
+ingestion time, and polls until the TTL monitor has removed the first one, with
+a limit of 150 seconds. The monitor wakes up every 60 seconds, so the wait
+depends on where in that cycle the insert happens. In three runs the test took
+20 s, 30 s and 40 s, as reported by `pytest --durations`, and the current
+reading was still present each time.
+
+Four problems occurred. The first draft of the script reached the database
+through a helper function that also declared a constant named `db`, which would
+have clashed with the `db` object of the shell, and it was simplified to one
+named handle before the first run. Furthermore, the first version of the test
+cleanup deleted its documents by device. To find out whether the rejection tests
+could fail at all, the validation of `readings` was switched off by hand and the
+tests were run again, and nine of them failed as they should. That run also
+inserted a document without a device, which the cleanup by device could not
+find, and it made a later run fail with a duplicate identifier after the
+validator had been restored. The cleanup now deletes by the prefix of the
+identifier and runs before each test as well as after it, so that the leftovers
+of an interrupted run cannot break the next one. The third problem was minor: a
+manual check of the exit code of the setup was swallowed by a pipe, which is why
+the tests assert the return code directly.
+the tests assert the return code directly.
+
+The fourth problem was the most important, and it was found only by the final
+check from a clean start: one run of the integration tests ended with 17 errors
+and one failure. The 17 errors were exactly the tests whose cleanup writes to
+the database, and the failure was the test that expects `mongo1` to be the
+primary, so `mongo1` had not been the primary at that moment. The service
+`mongo-setup` had exited as soon as any member was the primary, and after a first
+initiation another member sometimes wins the first election. The state was read
+at the moment the service exited in 14 clean starts. In 12 of them `mongo1` was
+the primary and in 2 of them `mongo2` was, so the statement of ADR-0009 that
+`mongo1` is the primary after a clean start was true only some seconds later.
+These counts come from an ad hoc loop that is not part of the repository. The
+cause was not the tests but the setup, so `init-replica-set.js` now waits after
+the first initiation until `mongo1` is the primary, while a repeated start still
+accepts any primary. After the change the same loop gave 14 clean starts of 14
+with `mongo1` as the primary, which does not prove that the case cannot occur,
+but the script now waits for exactly that state. A note under ADR-0009 records
+the correction. This also matters for B5: the loader must not assume that the
+primary is `mongo1`, and it connects through the replica set for that reason.
+
+Open for the following items. The summary collections have no index on device
+and period, which B6 decides once the volumes are known. The validator checks
+the format of the identifier but not its agreement with `device` and `ts`, which
+`identity.py` has to guarantee in B4. The figure of 13 duplicates on device and
+millisecond, measured ad hoc before this item with the truncation fixed in
+ADR-0010, is not quoted anywhere and is pinned in the profile script in B4.
+
+Next: B4, the pure rules for identity, slicing and validation.

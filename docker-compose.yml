@@ -66,7 +66,20 @@ services:
     tmpfs:
       - /data/db
       - /data/configdb
-    command: ["mongosh", "--quiet", "--host", "mongo1", "--port", "27017", "--file", "/db/init-replica-set.js"]
+    environment:
+      # Retention of the raw readings in days, applied to their ingestion time.
+      RETENTION_DAYS: ${RETENTION_DAYS:-365}
+    # The first call is a direct connection, because the replica set does not
+    # exist yet. The second one uses the replica set, so that it reaches the
+    # primary, which is not always mongo1 after a restart.
+    command:
+      - sh
+      - -ec
+      - |
+        mongosh --quiet --host mongo1 --port 27017 --file /db/init-replica-set.js
+        mongosh --quiet \
+          "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0" \
+          --file /db/setup-database.js
 
 volumes:
   mongo1-data:

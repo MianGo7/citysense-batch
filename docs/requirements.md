@@ -11,7 +11,7 @@ which is not committed.
 | Id | Requirement | Status | Where |
 | --- | --- | --- | --- |
 | R1 | The database runs in Docker from an open source image on Docker Hub | done | `docker-compose.yml` (official `mongo:8.0.38`, ADR-0009), `db/init-replica-set.js`, `tests/integration/test_stack.py` |
-| R2 | A script sets up the database inside the container | open | |
+| R2 | A script sets up the database inside the container | done | `db/setup-database.js`, service `mongo-setup` in `docker-compose.yml`, `tests/integration/test_database.py` (ADR-0010) |
 | R3 | A Python script connects to the database and loads the sample data | open | |
 | R4 | A Dockerfile automates the entire process | open | |
 | R5 | The code is in an open GitHub repository | open | |
@@ -30,8 +30,8 @@ which is not committed.
 | C6 | Hourly and daily summaries carry reading counts and coverage | open | |
 | C7 | The latest valid value per sensor carries its measurement time | open | |
 | C8 | Alerts follow the alert model: deduplicated, with hysteresis, capped, with sensor silent and batch failed alerts | open | |
-| C9 | A compound index on device and descending timestamp | open | |
-| C10 | A TTL index on raw readings, summaries kept | open | |
+| C9 | A compound index on device and descending timestamp | done | index `device_ts` in `db/setup-database.js`, checked by `test_readings_index_serves_ranges_per_device` |
+| C10 | A TTL index on raw readings, summaries kept | done | index `ingested_at_ttl`; `test_the_ttl_monitor_removes_an_expired_reading_and_keeps_a_current_one` and `test_only_raw_readings_expire` |
 | C11 | A three node replica set survives the loss of the primary during a load | open | The replica set elects a new primary after the loss of mongo1 (B2, journal 2026-11-12); survival of a load is open (B5, B8) |
-| C12 | New metrics from future sensors are accepted without a schema change | open | |
+| C12 | New metrics from future sensors are accepted without a schema change | done | validators allow additional fields, `test_a_reading_with_an_unknown_extra_metric_is_accepted` |
 | C13 | The figures about the sample data quoted in the concept are reproduced by a script and pinned by a test | done | `scripts/profile_data.py`, `tests/unit/test_sample_data.py`, `data/README.md` |

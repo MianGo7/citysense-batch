@@ -134,6 +134,11 @@ coverage, and a failed batch raises an alert as well.
 Open: the concrete thresholds. They are proposed in B7 with the number of
 alerts each choice produces over the sample week.
 
+Note added on 2026-11-13: the source of an alert is stored in the required field
+`source`, which replaces the phrase "its source device" above, because an alert
+about a failed batch has no device. The field `device` stays optional. See
+ADR-0010. The text of this entry is otherwise unchanged.
+
 ---
 
 ## ADR-0008, Python 3.13 with uv, uv_build and ruff. 2026-11-12, accepted.
@@ -250,3 +255,106 @@ and then. The script `db/init-replica-set.js` now waits after the first
 initiation until `mongo1` itself is the primary, and a repeated start still
 accepts any primary, because `mongo1` may be taking over after a failure. The
 text of this entry is otherwise unchanged.
+
+---
+
+## ADR-0010, the data model, the validators, the indexes and the retention. 2026-11-13, accepted.
+
+The six collections of the concept are created by the script
+`db/setup-database.js`, which the service `mongo-setup` runs after the replica
+set has been initiated. Every collection has a `$jsonSchema` validator with the
+validation level `strict` and the validation action `error`, so that an invalid
+document is rejected instead of being stored with a warning. The validators
+require the core fields and the types of the known metrics, and they allow every
+other field. A reading of a future sensor with a metric that is not known yet is
+therefore accepted without a schema change, which is the first point of the
+database requirements. A schema that forbids additional fields was rejected for
+exactly that reason, and so was running without validators, because the loader
+would then be the only place that enforces the structure and a second writer
+could store anything. The action `warn` was rejected because a warning that
+nobody reads does not protect the summaries and alerts that are derived from
+the readings.
+
+A reading is one flat document. The metrics are top level fields and not
+members of a nested `metrics` subdocument, because a nested level would have to
+be written in every query and the concept describes new metrics as further
+fields. The required fields are `_id`, `device`, `ts`, `ingested_at`, `batch`
+and `quality`. The metrics of the current sensors, `co`, `humidity`, `lpg`,
+`smoke` and `temp` as numbers and `light` and `motion` as booleans, are optional
+and typed when present, so that a future sensor that lacks one of them is still
+valid. The name `ts` is kept from the source, because the one to one mapping to
+the source column matters more than a more descriptive name. It is stored as a
+BSON date, which keeps milliseconds, and not as the number of the source, so
+that the database can truncate it to hours and days for the summaries and so
+that dates are compared as dates.
+
+The identifier of a reading is the string `<device>|<epoch milliseconds>`, for
+instance `b8:27:eb:bf:9d:51|1594512094385`. The milliseconds are the source
+timestamp multiplied by 1000 and truncated, not rounded, because a BSON date
+truncates as well, so that the identifier and `ts` always describe the same
+instant. The validator checks the format of the identifier with a pattern, not
+its agreement with `device` and `ts`. B4 builds the identifier in `identity.py`
+and pins in the profile script that no two readings of one device share a
+millisecond, which is the condition under which the truncation loses nothing.
+Random identifiers with a unique index were rejected in ADR-0004.
+
+The field `quality` is required and holds `flags`, an array of strings that may
+be empty. An empty array means that the reading was checked and found
+plausible, whereas a missing field would mean that it was never checked, an
+ambiguity that a strict validator should not allow. Summaries and alerts select
+the valid readings with `{"quality.flags": {$size: 0}}`. The field `batch` is the
+UTC day of the batch as `YYYY-MM-DD`, which is also the identifier of the entry
+in `batch_runs`.
+
+The keys of the derived collections are fixed so that the pipelines of B6 can
+merge on `_id` without a further index. The identifier of `summaries_hourly` and
+`summaries_daily` is the object `{device, period_start}`, and both values are
+repeated as top level fields, because a query by device and period reads them
+directly, whereas a range over a member of `_id` cannot use the index of `_id`.
+The identifier of `latest` is the device, so that there is one document per
+device, and the identifier of `batch_runs` is the UTC day. Their required fields
+are the minimum that the concept commits to: counts and coverage for the
+summaries, the measurement time for `latest`, and status, attempts and start
+time for `batch_runs`. The shape of the statistics per metric is left to B6.
+Because the setup script replaces the validators on every run through `collMod`,
+tightening them later is a change to this file and reaches existing volumes.
+Dropping and recreating a collection was rejected because it deletes the data.
+
+An alert requires `type`, one of `threshold`, `sensor_silent` and
+`batch_failed`, `status`, one of `open`, `acknowledged` and `resolved`, and
+`source`, a string that is the device for a sensor alert and `loader` for a
+failed batch. The field `source` replaces the phrase "its source device" in
+ADR-0007, because an alert about a failed batch has no device. The field
+`device` stays optional, and every other field of the alert model stays optional
+until the alert rules of B7 fix them.
+
+Three indexes are created, each with a fixed name so that it can be found and
+changed by name. The index `device_ts` on `readings`, device ascending and
+timestamp descending, serves the time range per device and the latest reading
+per device. The index `status_type_device` on `alerts` serves the open alerts
+per sensor. The index `ingested_at_ttl` on `readings` removes raw readings after
+the retention period. The retention is the environment variable `RETENTION_DAYS`
+with the default 365, which Compose passes to `mongo-setup`, and it applies to
+the ingestion time, because the sample readings date from 2020 and would expire
+immediately on the measurement time. A value that is not a positive whole number
+fails the setup with a non zero exit code, and a changed value is applied to the
+existing index through `collMod`, because `createIndex` with different options
+on an existing index fails. An existing index with the same name and a different
+key is reported as an error and not dropped. No other collection has a TTL
+index, so the summaries are kept permanently.
+
+The setup is a script for `mongosh` and not a Python module, because the task
+asks for a script that sets up the database inside the container, and the image
+of `mongo-setup` already contains `mongosh`, so the setup needs no Python and no
+further image. The first call of the service is a direct connection to `mongo1`,
+because the replica set does not exist yet. The second call connects through the
+replica set, so that it reaches the primary, which is not always `mongo1` after
+a restart.
+
+Two points are left open on purpose. The summary collections have no index on
+`device` and `period_start`, because the concept lists none, and B6 decides
+whether the queries of the planners need one once the volumes are known.
+Furthermore, the validator does not compare `_id` with `device` and `ts`, so a
+loader that builds an inconsistent identifier would not be stopped by the
+database. That agreement is meant to be a property of `identity.py`, which B4 builds and
+tests.
