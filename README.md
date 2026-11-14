@@ -168,6 +168,9 @@ against the stack and check what a user of the data would see: counts, the
 agreement of the summaries with the raw readings, repeated runs that change
 nothing, and the alerts of the sample week. They take about eight minutes.
 
+A workflow in `.github/workflows/ci.yml` runs the lint and the unit tests on every push,
+and then the integration tests on a freshly started stack (ADR-0016).
+
 ## Project structure
 
     docker-compose.yml       three MongoDB nodes, the setup service and the loader
@@ -189,6 +192,7 @@ nothing, and the alerts of the sample week. They take about eight minutes.
     scripts/                 demonstrations, verification queries, data profile
     tests/unit/              rules and orchestration, no database
     tests/integration/       against the running stack
+    .github/workflows/       continuous integration
     docs/                    concept, requirements, decision log, journal, evidence
 
 The modules that hold rules do not import the database driver, so they are tested

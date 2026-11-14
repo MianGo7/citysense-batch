@@ -616,3 +616,31 @@ the figures of the quick start are those that the integration tests pin.
 
 The requirement R7 is done. R5, the open GitHub repository, stays open, because the
 repository has no remote and publishing it is a step for the student.
+
+## 2026-11-14, continuous integration
+
+B9 was committed, and B10, the continuous integration, was taken next on the
+instruction of the student. The workflow has two jobs. The first runs ruff and the unit
+tests on the locked environment, and the second, which starts only if the first has
+passed, starts the Compose stack, waits for the loader and runs the integration
+tests. The decision, with the rejected alternatives, is ADR-0016.
+
+Two details needed a decision. The first was how to wait for a one shot loader. The
+option `--abort-on-container-exit` would have stopped the database nodes together
+with the loader, so the step starts the stack detached and waits for the container of
+the loader with `docker wait`. The commands of that step were run on the development
+machine after `docker compose down -v`, and the loader ended with exit code 0. The
+second was the choice of the actions. Only two actions of the platform itself are
+used, each pinned to the commit of a tag that was read from its repository, and the
+uv tool is installed with pip at the version of the `Dockerfile`, so that a third
+party action is not needed. A unit test, `tests/unit/test_workflow.py`, keeps the
+version of uv in step with the `Dockerfile` and checks the pins.
+
+One fact was found on the way. The repository has a remote named `origin`, which the
+student added after B4, and its main branch ends at the commit of B4. The
+tooling here does not push, so the workflow has not run on the platform. The done
+condition of B10, both jobs passing on the remote, is therefore outstanding, and the
+backlog says so instead of marking the item done. The requirement R5 and the README
+statement about the processor are left to the student until a run and the visibility
+of the repository have been observed. The hosted runners have an x86 processor, so a
+successful run will also be the first evidence about the stack outside Apple silicon.

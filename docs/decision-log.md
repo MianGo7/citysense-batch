@@ -1020,3 +1020,61 @@ the first day alone, because the sample week has no open alert at its end, and
 acknowledges an alert that is still open. After the other days are loaded, the
 alert is resolved and keeps the time of its acknowledgement, which shows the
 status `acknowledged` of the alert model on real data and not only in a test.
+
+---
+
+## ADR-0016, continuous integration with GitHub Actions. 2026-11-14, accepted.
+
+The claim that a fresh clone starts with one command rests on a single development
+machine until another machine confirms it. A workflow in `.github/workflows/ci.yml`
+therefore runs on every push and every pull request. The first job installs the
+locked environment, runs ruff for the lint and the format check, and runs the unit
+tests, which need no database and finish within a minute. The second job starts only
+if the first one has passed, builds and starts the Compose stack as the README does,
+waits for the loader and runs the integration tests against it. The integration job
+was made dependent on the first one, so that a lint error does not cost the eight
+minutes of the stack, although the two jobs could also have run in parallel for a
+faster answer. GitHub Actions was chosen because the repository is to be hosted on
+GitHub (R5), so that no second account or service is needed. A self hosted runner
+and an external service were rejected for the same reason, because each needs a host
+or an account that a reader of the repository could not reproduce.
+
+The workflow starts the stack with `docker compose up --build --detach` and then
+waits for the container of the loader with `docker wait`, failing the step if its
+exit code is not 0. The option `--abort-on-container-exit` with `--exit-code-from
+loader` was rejected, because it stops the three database nodes as soon as the loader
+ends, and the integration tests need them running. The option `--wait` was rejected,
+because the setup service and the loader are one shot services that end by design,
+and the behaviour of the option for a service that has ended is a risk that the
+explicit wait does not carry. The exact commands of the step were run on the
+development machine before they were written into the workflow.
+
+Two actions are used, `actions/checkout` and `actions/setup-python`, both from the
+organisation of the platform. Each is pinned to the full identifier of its commit,
+with the tag as a comment, because a tag can be moved after the fact and a commit
+cannot. The identifiers were read from the tags of the two repositories on
+2026-11-14: `actions/checkout` v7.0.1 and `actions/setup-python` v7.1.0. The action
+`astral-sh/setup-uv` was rejected, because it would add a third owner whose code runs
+with the token of the workflow, to save one line. The uv tool is installed with `pip
+install uv==0.12.23`, the version of the tag in the `Dockerfile`, so that the image
+and the checks use the same tool. The reason that the `Dockerfile` gives against
+installing uv with pip, that the version would follow the package index, does not
+apply here, because the version is fixed. The interpreter is the one that
+`actions/setup-python` provides from `.python-version`, and `UV_PYTHON_DOWNLOADS` is
+set to `never`, as in the image. The runner is `ubuntu-24.04` and not
+`ubuntu-latest`, because the latter moves to a new release without a change of the
+repository. A unit test, `tests/unit/test_workflow.py`, checks that the version of uv
+in the workflow equals the tag in the `Dockerfile`, that every action is pinned to a
+commit, that the commands of both jobs are present and that the token can only read
+the repository.
+
+The consequences are the following. The pins age, and nothing updates them
+automatically; an update is made by hand and noted in this log, because an automatic
+update service would be one more dependency. The hosted runners have an x86
+processor, so the first successful run is also the first test of the stack on an
+architecture other than Apple silicon, which the README states as untested. That
+statement is not changed until a run has been observed. Finally, the workflow was
+validated as far as it can be without the remote: the file was parsed, the commands
+of both jobs were run on the development machine, and the guard tests pass. The
+done condition of B10, that both jobs pass on the remote, is outstanding until the
+history has been published and the run has been seen.
