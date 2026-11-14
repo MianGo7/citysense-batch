@@ -71,6 +71,29 @@ def to_reading(document):
     )
 
 
+def bulk_write(collection, operations):
+    """Run unordered bulk operations and raise a write concern failure as its own class.
+
+    A write that was applied on the primary but not acknowledged by a majority, for
+    instance during an election, is reported by the driver inside a bulk error,
+    which the loader could not tell apart from a rejected document. It is raised
+    as `WriteConcernError`, which the loader retries, whereas a rejected document
+    keeps its `BulkWriteError` and is not retried.
+    """
+    try:
+        return collection.bulk_write(operations, ordered=False)
+    except BulkWriteError as error:
+        details = error.details
+        if not details.get("writeErrors") and details.get("writeConcernErrors"):
+            first = details["writeConcernErrors"][0]
+            raise WriteConcernError(
+                first.get("errmsg", "the write concern was not satisfied"),
+                first.get("code"),
+                first,
+            ) from error
+        raise
+
+
 class Store:
     """The collections that the loader reads and writes."""
 
@@ -158,20 +181,5 @@ class Store:
             )
             for document in documents
         ]
-        try:
-            result = self.readings.bulk_write(operations, ordered=False)
-        except BulkWriteError as error:
-            details = error.details
-            if not details.get("writeErrors") and details.get("writeConcernErrors"):
-                # Applied on the primary but not acknowledged by a majority, for
-                # instance during an election. The driver reports this inside a
-                # bulk error, which the loader could not tell apart from a
-                # rejected document, so it is raised as its own class.
-                first = details["writeConcernErrors"][0]
-                raise WriteConcernError(
-                    first.get("errmsg", "the write concern was not satisfied"),
-                    first.get("code"),
-                    first,
-                ) from error
-            raise
+        result = bulk_write(self.readings, operations)
         return result.upserted_count, result.matched_count

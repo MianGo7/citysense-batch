@@ -95,6 +95,10 @@ services:
     depends_on:
       mongo-setup:
         condition: service_completed_successfully
+    volumes:
+      # The limits of the alerts, read at the start of a run. Mounted read only,
+      # so that a change is made on the host and the container cannot alter it.
+      - ./config:/app/config:ro
     environment:
       # Through the replica set, so that the loader finds the primary, which is
       # not always mongo1 after a restart.

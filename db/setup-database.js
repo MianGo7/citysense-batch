@@ -94,17 +94,45 @@ const SCHEMAS = {
     },
   },
 
-  // Only the fields that identify and manage an alert are required. The others
-  // stay optional until the alert rules of B7 fix them. The field source is the
-  // device for a sensor alert and loader for a failed batch, see ADR-0010.
+  // The alert model of ADR-0007 as fixed by ADR-0014. The identifier has the form
+  // type|source|metric or -|ISO start hour or -. The source is the device for a
+  // sensor alert and loader for a failed batch, see ADR-0010. The metric, the
+  // value, the threshold and the basis are absent or null where they do not apply,
+  // for instance for a failed batch, and the basis is null for an hour without any
+  // summary. The times of resolution and acknowledgement exist only after the
+  // alert reached that status.
   alerts: {
     bsonType: "object",
-    required: ["type", "status", "source"],
+    required: [
+      "_id",
+      "type",
+      "severity",
+      "status",
+      "source",
+      "message",
+      "recommended_action",
+      "first_seen",
+      "last_seen",
+      "occurrences",
+    ],
     properties: {
+      _id: { bsonType: "string" },
       type: { enum: ["threshold", "sensor_silent", "batch_failed"] },
+      severity: { enum: ["warning", "critical"] },
       status: { enum: ["open", "acknowledged", "resolved"] },
       source: { bsonType: "string" },
       device: { bsonType: "string" },
+      metric: { bsonType: "string" },
+      value: { bsonType: "number" },
+      threshold: { bsonType: "number" },
+      basis: { bsonType: ["object", "null"] },
+      message: { bsonType: "string" },
+      recommended_action: { bsonType: "string" },
+      first_seen: { bsonType: "date" },
+      last_seen: { bsonType: "date" },
+      occurrences: { bsonType: INTEGER },
+      resolved_at: { bsonType: "date" },
+      acknowledged_at: { bsonType: "date" },
     },
   },
 };
@@ -189,5 +217,8 @@ applyIndex("summaries_hourly", "device_period", { device: 1, period_start: 1 });
 applyIndex("summaries_daily", "device_period", { device: 1, period_start: 1 });
 // Serves the open alerts per sensor.
 applyIndex("alerts", "status_type_device", { status: 1, type: 1, device: 1 });
+// Serves the alerts of one source from a day on, which the daily cap and the
+// evaluation of an episode that began earlier read, see ADR-0014.
+applyIndex("alerts", "source_first_seen", { source: 1, first_seen: 1 });
 
 print(`Database ${DATABASE} is set up, retention ${RETENTION_DAYS_TEXT} days.`);

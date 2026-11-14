@@ -1,0 +1,51 @@
+# The limits of the alert rules, see ADR-0014. The loader reads this file at the
+# start of a run, and Compose mounts the directory into the container, so that a
+# limit can be changed without building the image again. A changed limit applies
+# to the evaluations that run after the change. Alerts that are stored are not
+# rewritten, except that an alert whose condition no longer holds is resolved.
+#
+# No limit here is a recommended value. The source does not explain the unit
+# "ppm (%)" of carbon monoxide, liquefied petroleum gas and smoke, and the
+# placement of the sensors, indoors or outdoors, is not known, so neither a
+# workplace limit nor a limit of a weather service applies cleanly. The limits are
+# operating limits chosen from the measured distribution of the sample week, and
+# they are meant to be replaced by official values once units and placement are
+# known. Each limit is applied to the hourly mean of the valid readings of a
+# device, never to a single reading. Leaving out a metric switches its alerts off.
+
+[limits]
+# Degrees Celsius, taken as Celsius because the values are consistent with it.
+# Over the sample week this raises 5 alerts, all for the device 1c:bf:ce:15:ec:4d.
+# The limit 25 would raise 8 alerts and 30 only 2.
+temp = 28.0
+
+# Percent relative humidity. Raises 1 alert, for 1c:bf:ce:15:ec:4d. The limits 80
+# and 90 raise the same single alert, so the choice has no effect on the sample
+# week, and 85 is kept as the middle value.
+humidity = 85.0
+
+# Unit not explained by the source. Raises 3 alerts over the sample week. The limit
+# 0.006 would fire on 47 normal hours of b8:27:eb:bf:9d:51, and 0.010 only once.
+co = 0.0075
+
+# Unit not explained by the source. Raises 3 alerts. The limit 0.009 would raise 8
+# alerts, 6 of them for b8:27:eb:bf:9d:51, and 0.012 only one.
+lpg = 0.010
+
+# Unit not explained by the source. Raises 2 alerts. The limit 0.025 would raise 4
+# alerts, and 0.035 only one.
+smoke = 0.030
+
+[silence]
+# An hour is silent when fewer than this share of the usual readings of the device
+# arrived. The usual count is the median of its earlier full hours, see ADR-0013.
+# An hour without any reading counts as zero. The lowest coverage of a healthy
+# full hour in the sample is 0.835, so a value of 0.8 would sit close to normal
+# variation, and 0.5 detects the loss of half of the readings.
+coverage = 0.5
+
+[cap]
+# The most alerts that one source raises per UTC day, over all types. Alerts that
+# are open are still updated after the cap is reached, and the alerts that were
+# held back are counted as alerts_suppressed in the batch log.
+per_source_and_day = 10

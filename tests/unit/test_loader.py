@@ -121,11 +121,46 @@ class FakeDerived:
         self.latest_merges.append((start.date().isoformat(), list(devices)))
 
 
+class FakeAlerting:
+    """The alert evaluation and the alerts about the loader, kept as a list of calls."""
+
+    COUNTS = {"alerts_opened": 2, "alerts_resolved": 1, "alerts_suppressed": 3}
+
+    def __init__(self, store):
+        self.store = store
+        self.calls = []
+        self.status_during_evaluation = []
+        self.failures = []
+
+    def evaluate(self, day):
+        if self.failures:
+            raise self.failures.pop(0)
+        self.status_during_evaluation.append(self.store.runs[day.isoformat()]["status"])
+        self.calls.append(("evaluate", day.isoformat()))
+        return dict(self.COUNTS)
+
+    def batch_failed(self, day, error, now):
+        self.calls.append(("batch_failed", day.isoformat(), type(error).__name__))
+
+    def batch_completed(self, day, now):
+        self.calls.append(("batch_completed", day.isoformat()))
+
+    def source_failed(self, error, now):
+        self.calls.append(("source_failed", type(error).__name__))
+
+    def source_read(self, now):
+        self.calls.append(("source_read",))
+
+    def named(self, name):
+        return [call for call in self.calls if call[0] == name]
+
+
 class FakeStore:
     """The questions and writes of `Store`, answered from dictionaries."""
 
     def __init__(self):
         self.derived = FakeDerived(self)
+        self.alerting = FakeAlerting(self)
         self.readings = {}
         self.runs = {}
         self.insert_calls = 0
@@ -197,7 +232,7 @@ def expected(source):
 
 
 def run(settings, store, **keywords):
-    return run_loader(settings, store, store.derived, **keywords)
+    return run_loader(settings, store, store.derived, store.alerting, **keywords)
 
 
 def settings_for(source, **changes):
@@ -206,6 +241,11 @@ def settings_for(source, **changes):
 
 def no_wait(sleeps=None):
     return partial(with_retries, sleep=(sleeps if sleeps is not None else []).append)
+
+
+def reading_counts(counts):
+    """The four counts of the readings, without the counts of the alerts."""
+    return {key: counts[key] for key in ("read", "inserted", "already_present", "flagged")}
 
 
 def stored_flags(store):
@@ -288,7 +328,7 @@ def test_the_first_run_loads_every_batch_with_the_flags_of_an_uninterrupted_pass
 def test_the_counts_of_a_batch_are_read_inserted_already_present_and_flagged(source):
     store = FakeStore()
     run(settings_for(source), store, retry=no_wait())
-    first, second, third = (store.runs[key]["counts"] for key in sorted(store.runs))
+    first, second, third = (reading_counts(store.runs[key]["counts"]) for key in sorted(store.runs))
     assert first == {"read": 15, "inserted": 15, "already_present": 0, "flagged": 2}
     # The two repeated rows of device B are read twice and stored once each, and
     # the flagged count is over stored readings, so a repeat is not counted again.
@@ -549,3 +589,83 @@ def test_a_batch_whose_derivation_fails_is_not_completed_and_is_derived_again(so
     assert run(settings_for(source), store, retry=no_wait()) == EXIT_OK
     assert store.runs["2020-07-12"]["attempts"] == 2
     assert [day for day, _ in store.derived.latest_merges][0] == "2020-07-12"
+
+
+# The alerts.
+
+
+def test_the_alerts_are_evaluated_inside_each_batch_before_it_is_completed(source):
+    store = FakeStore()
+    run(settings_for(source), store, retry=no_wait())
+    assert store.alerting.named("evaluate") == [
+        ("evaluate", "2020-07-12"),
+        ("evaluate", "2020-07-13"),
+        ("evaluate", "2020-07-14"),
+    ]
+    assert store.alerting.status_during_evaluation == ["running"] * 3
+
+
+def test_the_alert_counts_of_a_batch_are_kept_in_its_log_entry(source):
+    store = FakeStore()
+    run(settings_for(source), store, retry=no_wait())
+    for key in store.runs:
+        counts = store.runs[key]["counts"]
+        assert {name: counts[name] for name in FakeAlerting.COUNTS} == FakeAlerting.COUNTS
+
+
+def test_a_batch_whose_alert_evaluation_fails_is_not_completed_and_is_evaluated_again(source):
+    store = FakeStore()
+    store.alerting.failures = [OperationFailure("rejected")]
+    assert run(settings_for(source), store, retry=no_wait()) == EXIT_FAILED
+    assert store.runs["2020-07-12"]["status"] == "failed"
+    assert run(settings_for(source), store, retry=no_wait()) == EXIT_OK
+    assert store.runs["2020-07-12"]["status"] == "completed"
+
+
+def test_a_batch_that_fails_raises_the_alert_of_its_day(source):
+    store = FakeStore()
+    store.always_fail_with = OperationFailure("rejected")
+    assert run(settings_for(source), store, retry=no_wait()) == EXIT_FAILED
+    assert store.alerting.named("batch_failed") == [
+        ("batch_failed", "2020-07-12", "OperationFailure")
+    ]
+
+
+def test_a_failure_to_write_the_alert_does_not_hide_the_failure_of_the_batch(source):
+    store = FakeStore()
+    store.always_fail_with = OperationFailure("rejected")
+
+    def refuse(day, error, now):
+        raise AutoReconnect("down as well")
+
+    store.alerting.batch_failed = refuse
+    assert run(settings_for(source), store, retry=no_wait()) == EXIT_FAILED
+    assert store.runs["2020-07-12"]["status"] == "failed"
+
+
+def test_a_completed_batch_resolves_its_failure_alert_and_so_does_a_skipped_one(source):
+    store = FakeStore()
+    run(settings_for(source, max_batches=1), store, retry=no_wait())
+    assert store.alerting.named("batch_completed") == [("batch_completed", "2020-07-12")]
+    run(settings_for(source, max_batches=1), store, retry=no_wait())
+    assert store.alerting.named("batch_completed") == [
+        ("batch_completed", "2020-07-12"),
+        ("batch_completed", "2020-07-12"),
+        ("batch_completed", "2020-07-13"),
+    ]
+
+
+def test_an_unreadable_source_raises_the_alert_of_the_source_and_no_batch_alert(tmp_path):
+    path = tmp_path / "broken.csv"
+    path.write_text("not,the,header\n1,2,3\n")
+    store = FakeStore()
+    assert run(settings_for(str(path)), store, retry=no_wait()) == EXIT_FAILED
+    assert store.alerting.named("source_failed") == [("source_failed", "SourceError")]
+    assert store.alerting.named("batch_failed") == []
+
+
+def test_a_source_that_is_read_to_the_end_resolves_the_alert_of_the_source(source):
+    store = FakeStore()
+    run(settings_for(source), store, retry=no_wait())
+    assert store.alerting.named("source_read") == [("source_read",)]
+    assert store.alerting.named("source_failed") == []

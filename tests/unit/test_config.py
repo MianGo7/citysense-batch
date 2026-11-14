@@ -1,15 +1,21 @@
 """Unit tests of the settings that the loader reads from its environment."""
 
+from pathlib import Path
+
 import pytest
 
 from citysense.config import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_DATABASE,
     DEFAULT_SOURCE,
+    DEFAULT_THRESHOLDS,
     DEFAULT_URI,
     ConfigError,
     Settings,
+    load_thresholds,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_an_empty_environment_gives_the_defaults():
@@ -50,3 +56,47 @@ def test_an_empty_value_means_the_default():
 def test_a_number_that_is_not_a_positive_whole_number_is_rejected(name, value):
     with pytest.raises(ConfigError, match=name):
         Settings.from_environment({name: value})
+
+
+# The limits of the alerts.
+
+
+def test_the_limits_file_is_read_from_the_config_directory_unless_the_environment_says_otherwise():
+    assert Settings.from_environment({}).thresholds_file == DEFAULT_THRESHOLDS
+    assert DEFAULT_THRESHOLDS == "config/alert_thresholds.toml"
+    other = Settings.from_environment({"ALERT_THRESHOLDS": "/etc/limits.toml"})
+    assert other.thresholds_file == "/etc/limits.toml"
+
+
+def test_the_committed_limits_are_the_ones_that_were_approved():
+    thresholds = load_thresholds(ROOT / DEFAULT_THRESHOLDS)
+    assert dict(thresholds.limits) == {
+        "temp": 28.0,
+        "humidity": 85.0,
+        "co": 0.0075,
+        "lpg": 0.010,
+        "smoke": 0.030,
+    }
+    assert (thresholds.coverage, thresholds.cap) == (0.5, 10)
+
+
+def test_every_limit_of_the_committed_file_is_explained_by_a_comment():
+    lines = (ROOT / DEFAULT_THRESHOLDS).read_text().splitlines()
+    for position, line in enumerate(lines):
+        if line.split(" = ")[0] in {"temp", "humidity", "co", "lpg", "smoke", "coverage"}:
+            assert lines[position - 1].startswith("#"), line
+
+
+def test_a_limits_file_that_is_missing_or_unusable_stops_the_loader_before_it_starts(tmp_path):
+    with pytest.raises(ConfigError, match="absent.toml"):
+        load_thresholds(tmp_path / "absent.toml")
+    broken = tmp_path / "broken.toml"
+    broken.write_text("[limits\ntemp = 28")
+    with pytest.raises(ConfigError, match="broken.toml"):
+        load_thresholds(broken)
+    wrong = tmp_path / "wrong.toml"
+    wrong.write_text(
+        '[limits]\ntemp = "hot"\n[silence]\ncoverage = 0.5\n[cap]\nper_source_and_day = 10\n'
+    )
+    with pytest.raises(ConfigError, match="limits.temp"):
+        load_thresholds(wrong)

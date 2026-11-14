@@ -19,8 +19,9 @@ import pytest
 from pymongo import MongoClient
 
 from citysense.aggregation import Derived
+from citysense.alerting import Alerting
 from citysense.batches import Reading
-from citysense.config import Settings
+from citysense.config import DEFAULT_THRESHOLDS, Settings, load_thresholds
 from citysense.loader import EXIT_OK, run
 from citysense.store import Store, connect, to_document
 
@@ -123,8 +124,10 @@ def load(database_name, **changes):
     """Run the loader in this process against a database of the replica set."""
     settings = Settings(uri=URI, database=database_name, source=SOURCE, **changes)
     client = connect(URI)
+    database = client[database_name]
+    alerting = Alerting(database, load_thresholds(ROOT / DEFAULT_THRESHOLDS))
     try:
-        return run(settings, Store(client[database_name]), Derived(client[database_name]))
+        return run(settings, Store(database), Derived(database), alerting)
     finally:
         client.close()
 
@@ -489,3 +492,142 @@ def test_rerunning_an_early_day_changes_neither_the_summaries_nor_latest(client,
     assert (repeated["status"], repeated["counts"]["inserted"]) == ("completed", 0)
     assert {document["_id"]: document["ts"] for document in database.latest.find()} == newest
     assert snapshot(database) == before
+
+
+# The alerts of the sample week, see ADR-0014.
+
+# The measured number of threshold alerts per metric and device, which the limits
+# of `config/alert_thresholds.toml` produce over the sample week. The profile
+# script `scripts/alert_candidates.py` reproduces the same figures for the
+# candidate limits, which is how the limits were chosen.
+THRESHOLD_ALERTS = {
+    ("temp", DEVICES[1]): 5,
+    ("humidity", DEVICES[1]): 1,
+    ("co", DEVICES[0]): 2,
+    ("co", DEVICES[2]): 1,
+    ("lpg", DEVICES[0]): 2,
+    ("lpg", DEVICES[2]): 1,
+    ("smoke", DEVICES[0]): 2,
+}
+FIRST_HOURS = [
+    "threshold|00:0f:00:70:91:0a|co|2020-07-12T22:00:00Z",
+    "threshold|00:0f:00:70:91:0a|co|2020-07-15T23:00:00Z",
+    "threshold|00:0f:00:70:91:0a|lpg|2020-07-12T22:00:00Z",
+    "threshold|00:0f:00:70:91:0a|lpg|2020-07-15T23:00:00Z",
+    "threshold|00:0f:00:70:91:0a|smoke|2020-07-12T22:00:00Z",
+    "threshold|00:0f:00:70:91:0a|smoke|2020-07-15T23:00:00Z",
+    "threshold|1c:bf:ce:15:ec:4d|humidity|2020-07-16T21:00:00Z",
+    "threshold|1c:bf:ce:15:ec:4d|temp|2020-07-12T18:00:00Z",
+    "threshold|1c:bf:ce:15:ec:4d|temp|2020-07-15T18:00:00Z",
+    "threshold|1c:bf:ce:15:ec:4d|temp|2020-07-17T20:00:00Z",
+    "threshold|1c:bf:ce:15:ec:4d|temp|2020-07-18T16:00:00Z",
+    "threshold|1c:bf:ce:15:ec:4d|temp|2020-07-19T15:00:00Z",
+    "threshold|b8:27:eb:bf:9d:51|co|2020-07-16T22:00:00Z",
+    "threshold|b8:27:eb:bf:9d:51|lpg|2020-07-16T22:00:00Z",
+]
+LIMITS = {"temp": 28.0, "humidity": 85.0, "co": 0.0075, "lpg": 0.010, "smoke": 0.030}
+
+
+def alert_snapshot(database):
+    return {document["_id"]: document for document in database.alerts.find()}
+
+
+def test_the_sample_week_raises_fourteen_threshold_alerts_per_metric_and_device(loaded):
+    raised = {}
+    for alert in loaded.alerts.find({"type": "threshold"}):
+        key = (alert["metric"], alert["source"])
+        raised[key] = raised.get(key, 0) + 1
+    assert raised == THRESHOLD_ALERTS
+    assert sum(raised.values()) == 14
+    assert sorted(alert_snapshot(loaded)) == FIRST_HOURS
+
+
+def test_the_sample_week_raises_no_silent_alert_and_no_alert_about_the_loader(loaded):
+    assert loaded.alerts.count_documents({"type": "sensor_silent"}) == 0
+    assert loaded.alerts.count_documents({"type": "batch_failed"}) == 0
+    assert loaded.alerts.count_documents({}) == 14
+
+
+def test_no_alert_of_the_sample_week_was_suppressed_by_the_cap(loaded):
+    counts = [document["counts"] for document in loaded.batch_runs.find()]
+    assert sum(each["alerts_suppressed"] for each in counts) == 0
+    assert sum(each["alerts_opened"] for each in counts) == 14
+
+
+def test_every_alert_of_the_sample_week_has_ended_before_the_horizon(loaded):
+    # The last hour of the data, 20 July 00:00, holds only a few minutes of readings
+    # and lies after the horizon, so it is not judged. The last complete hour is
+    # 19 July 23:00, which is clear for every device, so every alert is resolved.
+    assert {alert["status"] for alert in loaded.alerts.find()} == {"resolved"}
+    last = max(alert["last_seen"] for alert in loaded.alerts.find())
+    assert last <= datetime(2020, 7, 19, 22, tzinfo=UTC)
+    assert max(alert["resolved_at"] for alert in loaded.alerts.find()) <= datetime(
+        2020, 7, 20, tzinfo=UTC
+    )
+
+
+def test_every_alert_names_a_summary_that_exists_and_a_value_above_its_limit(loaded):
+    for alert in loaded.alerts.find():
+        assert alert["value"] > alert["threshold"] == LIMITS[alert["metric"]]
+        reference = alert["basis"]
+        assert reference["collection"] == "summaries_hourly"
+        summary = loaded.summaries_hourly.find_one({"_id": reference["_id"]})
+        assert summary["metrics"][alert["metric"]]["mean"] == alert["value"]
+        assert summary["reading_count"] > 0
+        assert alert["first_seen"] <= reference["_id"]["period_start"] <= alert["last_seen"]
+
+
+def test_an_alert_carries_the_content_that_the_alert_model_asks_for(loaded):
+    alert = loaded.alerts.find_one({"_id": FIRST_HOURS[7]})
+    assert alert["type"] == "threshold"
+    assert alert["severity"] == "warning"
+    assert alert["source"] == alert["device"] == DEVICES[1]
+    assert alert["message"] == f"Hourly mean temperature 28.46 above limit 28.0 at {DEVICES[1]}"
+    assert alert["recommended_action"] == "Check the location and inform the affected district."
+    assert alert["first_seen"] == datetime(2020, 7, 12, 18, tzinfo=UTC)
+    assert alert["last_seen"] == datetime(2020, 7, 12, 21, tzinfo=UTC)
+    assert alert["occurrences"] == 4
+    assert alert["resolved_at"] == datetime(2020, 7, 12, 23, tzinfo=UTC)
+
+
+def test_the_last_hour_would_have_made_every_sensor_silent_without_the_horizon(loaded):
+    # The sentinel of the horizon rule: the partial hour exists and is far below
+    # the limit of the silence, yet it raised no alert.
+    partial = datetime(2020, 7, 20, tzinfo=UTC)
+    coverages = [
+        document["coverage"] for document in loaded.summaries_hourly.find({"period_start": partial})
+    ]
+    assert len(coverages) == 3
+    assert all(coverage < 0.5 for coverage in coverages)
+    assert loaded.alerts.count_documents({"type": "sensor_silent"}) == 0
+
+
+def test_rerunning_every_batch_leaves_the_alerts_unchanged(client, scratch):
+    name = scratch()
+    assert load(name) == EXIT_OK
+    before = alert_snapshot(client[name])
+    client[name].batch_runs.delete_many({})
+    assert load(name) == EXIT_OK
+    assert alert_snapshot(client[name]) == before
+    counts = [document["counts"] for document in client[name].batch_runs.find()]
+    assert sum(each["alerts_opened"] for each in counts) == 0
+    assert sum(each["alerts_resolved"] for each in counts) == 0
+
+
+def test_rerunning_any_single_day_leaves_the_alerts_unchanged(client, scratch):
+    # Each day is repeated in turn on the finished load, so that the alerts of the
+    # later days exist already. An alert that spans midnight must keep its
+    # identifier, and the alerts of the days after it must not be touched.
+    name = scratch()
+    assert load(name) == EXIT_OK
+    database = client[name]
+    before = alert_snapshot(database)
+    assert len(before) == 14
+
+    for day in sorted(BATCH_COUNTS):
+        database.batch_runs.delete_one({"_id": day})
+        assert load(name) == EXIT_OK
+        assert alert_snapshot(database) == before, day
+        repeated = database.batch_runs.find_one({"_id": day})["counts"]
+        assert (repeated["alerts_opened"], repeated["alerts_resolved"]) == (0, 0), day
+        assert repeated["alerts_suppressed"] == 0, day

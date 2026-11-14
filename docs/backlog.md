@@ -134,7 +134,7 @@ Documents to update: `requirements.md`, `dev-journal.md`.
 
 ---
 
-## B7, alerts. Open.
+## B7, alerts. Done, 2026-11-14.
 
 The alert model and its rules follow ADR-0007. Threshold alerts are evaluated
 on hourly summaries of valid readings, never on single raw values. Sensor
@@ -170,6 +170,11 @@ restarts it and shows that the final counts are unchanged.
 `scripts/demo_failover.sh` stops the primary during a load and shows that the
 loader continues and the counts are correct. `scripts/queries.js` holds one
 example query per user type. The captured output goes to `docs/evidence/`.
+`scripts/queries.js` also shows how an engineer acknowledges an alert, by setting
+`status` to `acknowledged` together with a time in `acknowledged_at`, and the
+next evaluation then keeps that status while the condition persists (ADR-0014).
+The status `acknowledged` of the alert model is thereby demonstrated and not
+only declared.
 
 Done when both demonstrations pass on a clean stack and their output is
 captured.

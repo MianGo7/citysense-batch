@@ -115,6 +115,26 @@ def test_alerts_index_serves_open_alerts_per_sensor(database):
     assert list(index["key"].items()) == [("status", 1), ("type", 1), ("device", 1)]
 
 
+def test_alerts_have_an_index_on_source_and_first_seen(database):
+    index = indexes(database, "alerts")["source_first_seen"]
+    assert list(index["key"].items()) == [("source", 1), ("first_seen", 1)]
+
+
+def test_the_alerts_of_a_source_from_a_day_on_are_read_through_that_index(database):
+    plan = database.command(
+        "explain",
+        {
+            "find": "alerts",
+            "filter": {
+                "source": TEST_DEVICE,
+                "first_seen": {"$gte": datetime(2020, 7, 12, tzinfo=UTC)},
+            },
+        },
+        verbosity="queryPlanner",
+    )
+    assert "source_first_seen" in str(plan["queryPlanner"]["winningPlan"])
+
+
 def test_readings_expire_on_the_ingestion_time_after_the_default_retention(database):
     index = indexes(database, "readings")["ingested_at_ttl"]
     assert list(index["key"].items()) == [("ingested_at", 1)]
@@ -230,7 +250,34 @@ def test_the_derived_collections_accept_their_keys(database, cleanup):
     database.batch_runs.insert_one(
         {"_id": "1999-01-01", "status": "running", "attempts": 1, "started_at": period_start}
     )
-    database.alerts.insert_one({"type": "batch_failed", "status": "open", "source": TEST_DEVICE})
+    database.alerts.insert_one(alert())
+
+
+def alert(**changes):
+    """A complete alert of the model of ADR-0014, as the rules write it."""
+    moment = datetime(2020, 7, 12, 10, tzinfo=UTC)
+    document = {
+        "_id": f"threshold|{TEST_DEVICE}|temp|2020-07-12T10:00:00Z",
+        "type": "threshold",
+        "severity": "warning",
+        "status": "open",
+        "source": TEST_DEVICE,
+        "device": TEST_DEVICE,
+        "metric": "temp",
+        "value": 28.4,
+        "threshold": 28.0,
+        "basis": {
+            "collection": "summaries_hourly",
+            "_id": {"device": TEST_DEVICE, "period_start": moment},
+        },
+        "message": f"Hourly mean temperature 28.4 above limit 28.0 at {TEST_DEVICE}",
+        "recommended_action": "Check the location and inform the affected district.",
+        "first_seen": moment,
+        "last_seen": moment,
+        "occurrences": 1,
+    }
+    document.update(changes)
+    return document
 
 
 def summary(**changes):
@@ -278,19 +325,25 @@ def test_a_malformed_summary_is_rejected(database, cleanup, change):
     [
         pytest.param(
             "alerts",
-            {"type": "threshold", "status": "open"},
+            {key: value for key, value in alert().items() if key != "source"},
             id="alert without a source",
         ),
+        pytest.param("alerts", alert(type="loud"), id="alert of an unknown type"),
+        pytest.param("alerts", alert(status="closed"), id="alert of an unknown status"),
+        pytest.param("alerts", alert(severity="fatal"), id="alert of an unknown severity"),
         pytest.param(
             "alerts",
-            {"type": "loud", "status": "open", "source": TEST_DEVICE},
-            id="alert of an unknown type",
+            {key: value for key, value in alert().items() if key != "message"},
+            id="alert without a message",
         ),
         pytest.param(
             "alerts",
-            {"type": "threshold", "status": "closed", "source": TEST_DEVICE},
-            id="alert of an unknown status",
+            {key: value for key, value in alert().items() if key != "recommended_action"},
+            id="alert without a recommended action",
         ),
+        pytest.param("alerts", alert(occurrences=1.5), id="alert with a fractional count"),
+        pytest.param("alerts", alert(first_seen="2020-07-12"), id="alert with a time as text"),
+        pytest.param("alerts", alert(value="28.4"), id="alert with a value as text"),
         pytest.param(
             "batch_runs",
             {
@@ -319,6 +372,33 @@ def test_malformed_derived_documents_are_rejected(database, cleanup, collection,
     with pytest.raises(WriteError) as failure:
         database[collection].insert_one(document)
     assert failure.value.code == DOCUMENT_VALIDATION_FAILURE
+
+
+def test_an_alert_without_a_metric_or_a_basis_is_accepted(database, cleanup):
+    # A sensor silent alert has no metric, and the hour in which a device sent
+    # nothing has no summary to refer to, so its basis is null.
+    silent = alert(
+        _id=f"sensor_silent|{TEST_DEVICE}|-|2020-07-12T10:00:00Z",
+        type="sensor_silent",
+        basis=None,
+        value=0.0,
+        threshold=0.5,
+    )
+    del silent["metric"]
+    assert database.alerts.insert_one(silent).inserted_id == silent["_id"]
+
+
+def test_the_alert_of_a_failed_batch_has_no_device_value_or_metric(database, cleanup):
+    failed = alert(
+        _id="batch_failed|loader|-|2020-07-12T00:00:00Z",
+        type="batch_failed",
+        severity="critical",
+        source=TEST_DEVICE,
+        basis={"collection": "batch_runs", "_id": "2020-07-12"},
+    )
+    for name in ("device", "metric", "value", "threshold"):
+        del failed[name]
+    assert database.alerts.insert_one(failed).inserted_id == failed["_id"]
 
 
 def test_the_setup_can_be_run_again(database):

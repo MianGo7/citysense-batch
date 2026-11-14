@@ -4,7 +4,8 @@ import logging
 import sys
 
 from citysense.aggregation import Derived
-from citysense.config import ConfigError, Settings
+from citysense.alerting import Alerting
+from citysense.config import ConfigError, Settings, load_thresholds
 from citysense.loader import run
 from citysense.store import Store, connect
 
@@ -19,6 +20,7 @@ def main():
     )
     try:
         settings = Settings.from_environment()
+        thresholds = load_thresholds(settings.thresholds_file)
     except ConfigError as error:
         logging.getLogger("citysense").error("invalid setting: %s", error)
         return EXIT_CONFIGURATION
@@ -26,7 +28,7 @@ def main():
     client = connect(settings.uri)
     try:
         database = client[settings.database]
-        return run(settings, Store(database), Derived(database))
+        return run(settings, Store(database), Derived(database), Alerting(database, thresholds))
     finally:
         client.close()
 

@@ -139,6 +139,10 @@ Note added on 2026-11-13: the source of an alert is stored in the required field
 about a failed batch has no device. The field `device` stays optional. See
 ADR-0010. The text of this entry is otherwise unchanged.
 
+Note added on 2026-11-14 (B7): the thresholds that this entry leaves open are fixed
+in ADR-0014, together with the content of an alert, the cap, the resolution and the
+way the alerts are evaluated. The text of this entry is otherwise unchanged.
+
 ---
 
 ## ADR-0008, Python 3.13 with uv, uv_build and ruff. 2026-11-12, accepted.
@@ -358,6 +362,14 @@ Furthermore, the validator does not compare `_id` with `device` and `ts`, so a
 loader that builds an inconsistent identifier would not be stopped by the
 database. That agreement is meant to be a property of `identity.py`, which B4 builds and
 tests.
+
+Note added on 2026-11-14 (B7): the fields of an alert that this entry leaves
+optional are fixed in ADR-0014. The validator of `alerts` now requires the
+identifier, the type, the severity, the status, the source, the message, the
+recommended action, `first_seen`, `last_seen` and `occurrences`, and allows the
+device, the metric, the value, the threshold, the basis, `resolved_at` and
+`acknowledged_at`. The index `source_first_seen` on `source` and `first_seen` is
+added to the three indexes above. The text of this entry is otherwise unchanged.
 
 ---
 
@@ -722,3 +734,207 @@ null expected count, and require every other field to have its type.
 With the derivation, the loader reported 21.3 seconds for the first load from
 clean volumes in one run, against 16.8 and 18.6 seconds before, so the derivation
 adds a few tenths of a second per batch.
+
+---
+
+## ADR-0014, the alert rules, their limits and their evaluation. 2026-11-14, accepted.
+
+The alerts follow the model of ADR-0007. Threshold alerts are judged on the hourly
+mean of the valid readings of one metric of one device, never on a single reading,
+and an hour is judged only if it is complete, that is if it ends at or before the
+horizon fixed in ADR-0013. Sensor silent alerts are judged on the coverage of an
+hour. An hour in which a device sent no reading at all has no summary, and it is
+read as a reading count of zero, so that silence is detected by the rule and not
+by the absence of a document. Because the summaries hold valid readings only, a
+flagged value cannot raise an alert, which an integration test shows with a
+flagged reading of 99 degrees. An hour in which every reading is flagged has a
+coverage of zero and is silent as well, because a sensor whose readings are all
+implausible gives no usable value, and the recommended action tells the reader to
+treat its values as unknown. Batch failed alerts are raised by the loader.
+
+The rules are pure functions in `alert_rules.py`, and `alerting.py` reads the
+summaries, hands them to the rules and writes the difference to the stored alerts.
+The module `alerting.py` is new and was not in the planned layout, because
+`store.py` is meant to hold single reads and writes, and `loader.py` to call an
+evaluation and not to contain it. Both are written so that the evaluation can be
+repeated at any time.
+
+### The limits and their basis
+
+The task speaks of recommended values, and none can be applied here, for two
+reasons. The source does not explain the unit "ppm (%)" of carbon monoxide,
+liquefied petroleum gas and smoke (ADR-0011), so no published limit for a gas
+can be compared with a reading. The placement of the sensors, indoors or
+outdoors, is not known, so neither a limit for a workplace nor a limit of a
+weather service applies cleanly to temperature and humidity. The limits are
+therefore operating limits, chosen from the measured distribution of the hourly
+means of the sample week, configurable, and meant to be replaced by official
+values once the units and the placement are known. They are
+
+| Metric | Limit on the hourly mean | Alerts over the sample week |
+| --- | --- | --- |
+| temp | 28.0 | 5, all for `1c:bf:ce:15:ec:4d` |
+| humidity | 85.0 | 1, for `1c:bf:ce:15:ec:4d` |
+| co | 0.0075 | 3 |
+| lpg | 0.010 | 3 |
+| smoke | 0.030 | 2 |
+
+which gives 14 threshold alerts, and an integration test pins them per metric and
+device and by their identifiers. For each metric a lower and a higher candidate
+were counted by `scripts/alert_candidates.py`, and an integration test pins the
+figures. The lower candidates are rejected because they raise alerts for hours
+that lie inside the usual range of a device. A limit of 0.006 for carbon monoxide
+raises 5 alerts and fires on 47 hours of `b8:27:eb:bf:9d:51`, whereas the chosen
+limit is exceeded in one hour of that device. A limit of 0.009 for liquefied
+petroleum gas raises 8 alerts, 6 of them for the same device, a limit of 0.025 for
+smoke raises 4 alerts, and a limit of 25 for temperature raises 8 alerts over 125
+hours, which is about 16 hours of each of the 8 days, so that the alert would
+describe the daily cycle of `1c:bf:ce:15:ec:4d` and not an exception. The higher
+candidates are rejected because they leave a value that is already unusual without
+an alert: 0.010 for carbon monoxide raises one alert, against 3 at the chosen
+limit, 0.012 for liquefied petroleum gas one against 3, 0.035 for smoke one against
+2, and 30 for temperature two against 5. For humidity the candidates 80, 85 and 90
+all raise the same single alert, so the choice does not matter on the sample, and
+85 is kept as the middle value. The gas limits are the weakest part of this
+choice, because they rest on the distribution of one week and on three sensors.
+
+The limits live in one committed file, `config/alert_thresholds.toml`, which the
+loader reads with `tomllib` from the standard library at the start of a run, so
+that no dependency is added. The format is TOML, Tom's Obvious Minimal Language. Compose mounts the directory `config` read only into
+the loader, so that an operator can change a limit on the host without building
+the image again, and the image holds a copy as a default, so that it also runs
+without the mount. Every entry carries a comment that states its basis. A file
+that is missing, is not valid TOML or holds a value that cannot be used stops the
+loader with exit code 2 before it reads the database, because an alert rule that
+is silently off is worse than a loader that does not start. A metric without an
+entry is not judged, which is how an operator switches one off. Constants in the
+code were rejected because a change would need a new image, and environment
+variables were rejected because seven values with comments belong in a file. A
+limit that is relative to the baseline of each device was rejected, because it
+needs weeks of history that the first week does not have, and because it would
+accept a sensor that is permanently too high.
+
+A changed limit applies to the evaluations that run after the change. An alert
+that is stored carries the limit that it was raised with in the field `threshold`
+and is not rewritten when the limit changes, with two exceptions that follow from
+the lifecycle. An alert that is unresolved and whose condition no longer holds
+under the new limit is resolved by the next evaluation, because it would otherwise
+stay open for ever, and a stored alert that is resolved is final. A day that is
+evaluated again after a change is judged under the new limit and may raise alerts
+that the old limit did not. This is the intended behaviour, and the test that
+repeats every day uses the committed limits.
+
+### The other parameters
+
+A sensor is silent in an hour whose coverage is below 0.5. The lowest coverage of
+a healthy full hour of the sample is 0.835 for `1c:bf:ce:15:ec:4d`, as ADR-0013
+pins, so a limit of 0.8 would raise no alert on the sample either, but it lies only
+0.035 below the lowest coverage of a healthy hour, so that normal variation of one
+device would come close to it. The value 0.5 means that half of the usual readings are missing.
+The first hour of a device is not judged, because it is partial by construction,
+as in ADR-0013, and an hour of a device that has no baseline is unknown and not
+silent, which means that a device that never delivers anything is not detected by
+this rule. The sample week raises no silent alert, so tests with made up data
+show the rule.
+
+An alert is resolved when the next complete hour is clear, without a margin band
+below the limit. The alert is one episode of consecutive hours, so a value that
+leaves the limit for one hour and returns raises a second alert, as the limits
+above were counted. A margin band was rejected because it adds a second parameter
+per metric that has no measured basis, and the full hour of hysteresis already
+stops a value that hovers around a limit within an hour from opening and closing
+alerts. Longer hysteresis was rejected for the same reason. The time of
+resolution is the end of the clear hour, which depends on the data and not on the
+clock.
+
+An alert is identified by `<type>|<source>|<metric or ->|<ISO start hour or ->`,
+for instance `threshold|1c:bf:ce:15:ec:4d|temp|2020-07-12T18:00:00Z`. The hour is
+the first hour of the episode, so that the same episode always has the same
+identifier and a repeated evaluation updates it and never raises it again. This is
+the deduplication, and it needs no separate lookup. An alert carries its type, its
+severity, its status, its source, the device, the metric where there is one, the
+highest hourly mean or the lowest coverage of the episode as `value`, the limit as
+`threshold`, a message, a recommended action, `first_seen`, `last_seen` and
+`occurrences`. The message names the metric, the device, the value and the limit,
+for instance "Hourly mean temperature 28.46 above limit 28.0 at 1c:bf:ce:15:ec:4d".
+The field `basis` refers to the hourly summary of the highest or lowest hour by
+collection and identifier, and it is null for an hour without a summary, because a
+reference to a document that does not exist would mislead. The times `first_seen`
+and `last_seen` are the start of the first and of the last hour of the episode, and
+`occurrences` is the number of hours in it. The recommended action is one fixed
+sentence per type. For a threshold alert it is to check the location and inform the
+affected district, for a sensor silent alert to inspect the sensor and its
+connection and to treat its values as unknown, not as normal, and for a batch
+failed alert to inspect the loader log and rerun the batch. The severity is
+warning for threshold and sensor silent alerts and critical for a failed batch.
+
+An engineer acknowledges an alert by setting the status to `acknowledged` with the
+time in `acknowledged_at`. The evaluation keeps that status while the condition
+persists and resolves the alert when it clears, and it writes with the stored
+status as part of the filter, so that an acknowledgement made between the read and
+the write is not overwritten. A write that finds nothing is made by the next
+evaluation, which reads the alert again.
+
+The cap is 10 new alerts per source and UTC day, over all types, counted by the day
+of `first_seen`. An alert that is open keeps being updated after the cap is
+reached, and the alerts that were held back are counted as `alerts_suppressed` in
+the log entry of the batch, so that a cap is never silent. The cap keeps the
+earliest alerts of the day, whatever the order in which the episodes were found.
+The sample never reaches it, as the busiest devices raise 6 alerts in the whole
+week, and unit and integration tests with 12 episodes in one day show it. A cap per type was
+rejected because it would allow up to three times the number of alerts for one
+device,
+and no cap was rejected because the lecture names the cap as the protection
+against an alert that is ignored because it is repeated. A suppressed episode has no
+stored alert to continue from, so the next batch judges it again from its first
+pending hour, with an identifier of its own, and the cap of the day of that hour
+decides. This is accepted as a limit.
+
+A failed batch raises an alert of the type `batch_failed` with the source `loader`
+after the retries are exhausted, and the alert is resolved when the same day is
+completed later, also when the batch is skipped as completed, which repairs an
+alert that stayed open because a run ended in between. A source file that cannot be
+parsed leaves no batch log entry, so it raises the same type with no batch day, the
+identifier `batch_failed|loader|-|-`, and it is resolved by the next run that reads
+the source to its end. A second failure of the same batch or source updates the
+alert, counts an occurrence and reopens it if it was resolved. The times of these
+alerts are the wall clock, because there is no hour of data to take them from. An
+alert that cannot be written, for instance because the database is the reason for
+the failure, is logged and does not hide the failure of the batch.
+
+### The evaluation
+
+The evaluation runs inside the batch, after the summaries and before the batch is
+marked as completed, for the reason given in ADR-0013. It judges every complete
+hour from the first pending hour to the horizon. The first pending hour is the one
+that holds the newest reading before the day, which was open when the previous
+batch was evaluated, and for the first batch it is the first hour of the data. If a
+day without any data lies in between, its hours are pending as well, and every
+device is silent in them. The summaries are read from there, and from the first
+hour of an alert that is unresolved or ended in the hour before, so that an episode
+that spans midnight keeps the identifier of its first hour and is not taken for a
+new one. The result is a function of the summaries, the limits and the stored
+alerts, with no wall clock in it, so a rerun of any day leaves the alerts
+unchanged, which an integration test shows for each of the nine days of the sample
+after all days are loaded. Remembering a watermark per device was rejected as a
+second kind of state to keep consistent, and judging the whole history on every
+batch was rejected because its cost grows with the retention. The alerts of one
+source are read through a new index `source_first_seen` on `source` and
+`first_seen`, which serves the cap and the lookup of an episode that began earlier.
+The validator of `alerts` now requires the fields above, apart from those that do
+not apply to every type, and the loader writes through the same bulk call as the
+readings, so that a write concern failure is retried and a rejected document is not.
+
+The counts of an evaluation are `alerts_opened`, `alerts_resolved` and
+`alerts_suppressed`, and they are kept in the log entry of the batch, where the
+sample week shows 14 opened and none suppressed. A rerun of a day opens and
+resolves nothing.
+
+### Limits of this design
+
+The limits rest on one week of three sensors. An hour is judged once per batch, so
+an alert is as current as the batch interval. The deduplication and the
+cap depend on the stored alerts, so an alert document that is deleted by hand is
+raised again at the next evaluation of its hours. A device without readings in
+the database is not known to the evaluation, so only a device that has delivered
+before can be silent.

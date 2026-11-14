@@ -9,12 +9,16 @@ election (ADR-0012) and a deployment has no reason to change them.
 """
 
 import os
+import tomllib
 from dataclasses import dataclass
+
+from citysense.alert_rules import ThresholdError, Thresholds
 
 DEFAULT_URI = "mongodb://127.0.0.1:27017/?directConnection=true"
 DEFAULT_DATABASE = "citysense"
 DEFAULT_SOURCE = "data/raw/iot_telemetry_data.csv.gz"
 DEFAULT_CHUNK_SIZE = 5000
+DEFAULT_THRESHOLDS = "config/alert_thresholds.toml"
 
 
 class ConfigError(ValueError):
@@ -37,6 +41,7 @@ class Settings:
     source: str = DEFAULT_SOURCE
     chunk_size: int = DEFAULT_CHUNK_SIZE
     max_batches: int | None = None
+    thresholds_file: str = DEFAULT_THRESHOLDS
 
     @classmethod
     def from_environment(cls, environ=None):
@@ -47,6 +52,7 @@ class Settings:
             source=_text(environ, "SOURCE_FILE", DEFAULT_SOURCE),
             chunk_size=_positive(environ, "CHUNK_SIZE", DEFAULT_CHUNK_SIZE),
             max_batches=_positive(environ, "MAX_BATCHES", None),
+            thresholds_file=_text(environ, "ALERT_THRESHOLDS", DEFAULT_THRESHOLDS),
         )
 
 
@@ -63,3 +69,19 @@ def _positive(environ, name, default):
     if not (raw.isascii() and raw.isdecimal()) or int(raw) < 1:
         raise ConfigError(f"{name} must be a positive whole number, got {raw!r}")
     return int(raw)
+
+
+def load_thresholds(path):
+    """Read the limits of the alerts from a TOML file and check them.
+
+    The standard library reads the format, so no dependency is added. A file that
+    is missing, is not valid TOML or holds a value that cannot be used stops the
+    loader before it touches the database, because an alert rule that is silently
+    off is worse than a loader that does not start.
+    """
+    try:
+        with open(path, "rb") as handle:
+            data = tomllib.load(handle)
+        return Thresholds.from_mapping(data)
+    except (OSError, tomllib.TOMLDecodeError, ThresholdError) as error:
+        raise ConfigError(f"the alert limits in {path} cannot be used: {error}") from error

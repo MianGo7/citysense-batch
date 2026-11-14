@@ -107,7 +107,9 @@ def derive_batch(derived, batch, retry):
     retry(partial(derived.merge_latest, devices, start, end))
 
 
-def load_batch(store, derived, batch, chunk_size, retry=with_retries, clock=time.monotonic):
+def load_batch(
+    store, derived, alerting, batch, chunk_size, retry=with_retries, clock=time.monotonic
+):
     """Load one batch and return its counts.
 
     The counts are those of this attempt. After an interrupted attempt, the
@@ -145,6 +147,10 @@ def load_batch(store, derived, batch, chunk_size, retry=with_retries, clock=time
         "flagged": flagged,
     }
     derive_batch(derived, batch, retry)
+    # The alerts are judged on the summaries, so they follow the derivation, and
+    # like it they come before the completion, so that a failure here is repeated
+    # by a rerun instead of leaving a completed batch without its alerts.
+    counts.update(retry(partial(alerting.evaluate, batch.day)))
     retry(partial(store.complete_batch_run, key, counts, datetime.now(UTC)))
     return counts
 
@@ -162,6 +168,26 @@ def _mark_failed(store, key, error, retry):
         LOG.error("could not record the failure of batch %s: %s", key, second)
 
 
+def _alert_failure(operation, description):
+    # An alert about a failure must not hide the failure. If the database is the
+    # reason for the failure, the alert cannot be written either, and the exit
+    # code and the log then carry the information.
+    try:
+        operation()
+    except PyMongoError as error:
+        LOG.error("could not %s: %s", description, error)
+
+
+def _resolve_failure(alerting, batch, retry):
+    # A batch that is completed ends its failure alert. This also runs for a batch
+    # that is skipped, which repairs an alert that stayed open because the process
+    # ended between the completion and this call.
+    _alert_failure(
+        partial(retry, partial(alerting.batch_completed, batch.day, datetime.now(UTC))),
+        f"resolve the alert of batch {batch.key}",
+    )
+
+
 def _log_totals(outcome, totals, loaded, skipped, began, clock):
     LOG.info(
         "%s: %d batches loaded, %d skipped, read %d, inserted %d, already present %d, "
@@ -177,7 +203,7 @@ def _log_totals(outcome, totals, loaded, skipped, began, clock):
     )
 
 
-def run(settings, store, derived, retry=with_retries, clock=time.monotonic):
+def run(settings, store, derived, alerting, retry=with_retries, clock=time.monotonic):
     """Process the batches of the source and return the exit code of the process.
 
     The code is 0 when every batch is completed or was skipped as completed, and 1
@@ -195,11 +221,21 @@ def run(settings, store, derived, retry=with_retries, clock=time.monotonic):
                 if existing is not None and existing["status"] == "completed":
                     skipped += 1
                     LOG.info("batch %s skipped, already completed", batch.key)
+                    _resolve_failure(alerting, batch, retry)
                     continue
-                counts = load_batch(store, derived, batch, settings.chunk_size, retry, clock)
+                counts = load_batch(
+                    store, derived, alerting, batch, settings.chunk_size, retry, clock
+                )
             except PyMongoError as error:
                 LOG.error("batch %s failed: %s", batch.key, _error_text(error))
                 _mark_failed(store, batch.key, error, retry)
+                _alert_failure(
+                    partial(
+                        retry,
+                        partial(alerting.batch_failed, batch.day, error, datetime.now(UTC)),
+                    ),
+                    f"raise the alert of batch {batch.key}",
+                )
                 _log_totals("failed", totals, loaded, skipped, began, clock)
                 return EXIT_FAILED
 
@@ -207,14 +243,18 @@ def run(settings, store, derived, retry=with_retries, clock=time.monotonic):
             totals.update(counts)
             LOG.info(
                 "batch %s completed: read %d, inserted %d, already present %d, flagged %d, "
-                "duration %.1f s",
+                "alerts opened %d, resolved %d, suppressed %d, duration %.1f s",
                 batch.key,
                 counts["read"],
                 counts["inserted"],
                 counts["already_present"],
                 counts["flagged"],
+                counts["alerts_opened"],
+                counts["alerts_resolved"],
+                counts["alerts_suppressed"],
                 clock() - batch_began,
             )
+            _resolve_failure(alerting, batch, retry)
             if settings.max_batches is not None and loaded >= settings.max_batches:
                 LOG.info("stopped after %d batches, as MAX_BATCHES asks", loaded)
                 break
@@ -222,8 +262,16 @@ def run(settings, store, derived, retry=with_retries, clock=time.monotonic):
         # The source is read before anything of the batch is written, so no
         # batch log entry exists for the day that could not be read.
         LOG.error("the source cannot be read: %s", _error_text(error))
+        _alert_failure(
+            partial(retry, partial(alerting.source_failed, error, datetime.now(UTC))),
+            "raise the alert of the source",
+        )
         _log_totals("failed", totals, loaded, skipped, began, clock)
         return EXIT_FAILED
 
+    _alert_failure(
+        partial(retry, partial(alerting.source_read, datetime.now(UTC))),
+        "resolve the alert of the source",
+    )
     _log_totals("finished", totals, loaded, skipped, began, clock)
     return EXIT_OK

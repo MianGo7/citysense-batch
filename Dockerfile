@@ -32,6 +32,10 @@ RUN groupadd --system --gid 10001 loader \
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 COPY data/raw ./data/raw
+# The limits of the alerts. Compose mounts the directory over this copy, so that a
+# limit can be changed without building the image, and the image still runs
+# without the mount (ADR-0014).
+COPY config ./config
 # Output without a buffer, so that `docker compose logs` shows a batch as soon as
 # it is completed.
 ENV PATH="/app/.venv/bin:$PATH" \

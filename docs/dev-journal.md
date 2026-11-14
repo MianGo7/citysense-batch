@@ -486,3 +486,59 @@ it as a count of zero.
 
 Next: B7, the alerts, which needs a proposal of the thresholds with measured counts
 before anything is implemented.
+
+## 2026-11-14
+
+B7, the alerts, was taken after the student had approved the limits and the other
+parameters on the basis of measured counts: the limits 28, 85, 0.0075, 0.010 and
+0.030, a silence limit of 0.5 for the coverage, a cap of 10 new alerts per source
+and day, resolution after one complete clear hour, and an alert of the type batch
+failed for the loader, including an unreadable source file. The counts had been
+measured first with a scratch query on the stored summaries. They were then moved
+into `scripts/alert_candidates.py` and pinned by an integration test before any of
+them was written into ADR-0014, as for B6.
+
+The result is `alert_rules.py` with the pure rules, a new module `alerting.py` that
+reads the summaries and writes the alerts, the limits in `config/alert_thresholds.toml`
+read with `tomllib` and mounted into the loader by Compose, a stricter validator of
+`alerts` and the index `source_first_seen`. The evaluation runs inside the batch
+before the completion, like the derivation. The sample week raises 14 threshold
+alerts, none silent, none suppressed, and the log entries of the batches show them
+as opened, resolved and suppressed counts. An alert that spans midnight, which two
+of the 14 do, keeps the identifier of its first hour, and repeating each of the nine
+days after the full load changes nothing in the collection.
+
+The hardest part was the idempotence of the evaluation. The first idea, to judge
+only the hours of the batch day, fails twice: the last hour of a day is not
+complete when the day is loaded, and an episode can begin on one day and end on
+the next. The design that remained judges every complete hour from the first
+pending hour, and from the first hour of any alert that is still unresolved, up to
+the horizon, so that the result is a function of the summaries and the stored
+alerts. A watermark per device was rejected as a second kind of state, and judging
+the whole history on every batch was rejected because its cost grows with the
+retention. The limits of the design are written into ADR-0014, among them that a
+device that never delivers anything has no baseline and is not detected, and that
+an episode suppressed by the cap is judged again from the first pending hour.
+
+Several mistakes of the work itself were found by the checks and not by reading. A test of
+the horizon had two devices without a summary in the hour in question and so
+rightly found two silent alerts, a test of a device that is silent for a whole
+batch had given that device no reading, so that it was not known to the evaluation
+at all, and a test of the flagged readings sliced an unordered result and failed
+once in four runs until the query was sorted. The mutation checks left one
+survivor, the baseline taken from the summaries before the first judged hour,
+which a new test now covers. A review of the draft of ADR-0014 found three
+statements that no figure supported, among them that a higher limit for
+temperature would have missed particular periods of heat and that the busiest
+device raised 5 alerts, where two devices raise 6. They were replaced by the
+pinned counts. The existing test of the validator, which inserted an alert with
+three fields, had to be rewritten, because the contract changed with ADR-0014, and
+the rule that applies is that its cases keep rejecting what they rejected before.
+
+One small change outside the feature was needed. The handling of a write concern
+error inside a bulk write moved from `insert_readings` into a function `bulk_write`
+of `store.py`, because the alerts need the same handling, and the behaviour of the
+readings did not change.
+
+Next is B8, with the demonstrations and the verification queries, which include the
+acknowledgement of an alert by an engineer.
