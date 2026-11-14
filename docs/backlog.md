@@ -198,7 +198,7 @@ Documents to update: `requirements.md` (R5, R7), `dev-journal.md`.
 
 ---
 
-## B10, continuous integration. Written, 2026-11-14; the run on the remote is outstanding.
+## B10, continuous integration. Done, 2026-11-14.
 
 A GitHub Actions workflow runs ruff and the unit tests on every push, and a
 second job starts the Compose stack and runs the integration tests.

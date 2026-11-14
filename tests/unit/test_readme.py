@@ -30,6 +30,11 @@ def test_the_figures_of_the_quick_start_are_those_that_the_tests_pin():
     assert "DAILY_SUMMARIES = 27" in integration
 
 
+def test_the_clone_command_names_the_repository_and_no_placeholder_remains():
+    assert "git clone https://github.com/MianGo7/citysense-batch.git" in README
+    assert "<the address" not in README
+
+
 def test_the_readme_has_the_sections_that_the_backlog_asks_for():
     for heading in (
         "## Purpose",

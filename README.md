@@ -77,7 +77,7 @@ The only requirement is Docker with the Compose plugin. The system was tested wi
 Docker 29.9.3 and Compose 5.7.0 on an Apple silicon machine. Nothing else is
 installed on the host, and no credentials, accounts or manual steps are needed.
 
-    git clone <the address of this repository>
+    git clone https://github.com/MianGo7/citysense-batch.git
     cd citysense-batch
     docker compose up --build
 
@@ -236,8 +236,10 @@ authentication and transport encryption (ADR-0009).
 MongoDB 5.0 and later require a processor with the AVX instruction set on x86
 machines, so the nodes of the official image, version 8.0.38, are not expected to
 start on an x86 machine without it. The image is published for several
-architectures and runs on Apple silicon, which is the platform where the system was
-tested. It was not tested on x86.
+architectures. The system was developed and tested on Apple silicon, and the workflow
+of the repository starts the stack, loads the sample and passes the integration tests
+of its push selection on the hosted x86 runners of GitHub (ADR-0017), so the system
+also runs on x86 machines with AVX.
 
 Alerts are only as current as the batch interval, so an application that shows them
 has to show the time of the last batch with every statement. A batch is taken as

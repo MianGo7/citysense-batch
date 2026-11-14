@@ -679,3 +679,28 @@ counting the selection, because the number of tests that the marker covers, 27, 
 agree with the sum of the tests that were meant: eleven loads, fifteen reads of the
 reference and the timer test. The done condition of B10 is still outstanding until the
 push run has been seen to pass.
+
+
+## 2026-11-14, the first passing run and the close of B10
+
+The push run 43623361721 on commit 11d8275 passed on the hosted x86 runners of GitHub,
+and the repository is public at https://github.com/MianGo7/citysense-batch. The run was
+read back with the GitHub command line tool before it was recorded: the conclusion is
+success, the head commit is 11d8275, and the job of the whole suite was skipped, as it
+is meant to be on a push. The lint and the unit tests took 38 seconds, the start of the
+stack with the load of the sample took 2 minutes and 17 seconds, and the push
+selection of 120 integration tests took 2 minutes and 21 seconds. On the development
+machine the same selection takes 47 seconds, so the runner is about three times
+slower, which agrees with the factor seen in the cancelled run. The manual run of the
+whole suite has not been started, so the time of the 27 slow tests on the runner is
+still unknown.
+
+B10 and the requirement R5 are closed with this run. The README now gives the address
+of the repository in the clone command, and its note on the AVX instruction set says
+that the stack starts, loads and passes the integration tests of the push selection on
+x86 runners, in place of the earlier statement that it was not tested on x86. That
+sentence rests on the runner, not on a physical machine, and it covers the push
+selection and not the slow tests. The earlier entries of this journal that call the
+repository local or the run outstanding are left as they were, because they record
+what was true on their date. A test now checks that the README holds no placeholder
+for the address.

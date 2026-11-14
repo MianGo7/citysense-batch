@@ -1142,3 +1142,11 @@ on a schedule was rejected, because the manual start gives the same result and n
 timer that runs unattended on the repository. The consequence is that the push run no
 longer proves the slow cases. A change that breaks only one of them is found on the
 development machine, or by the manual run, and not by the push run.
+
+Note of 2026-11-14: the push run 43623361721 on commit 11d8275 passed on the hosted x86
+runners. The lint and the unit tests took 38 seconds, the start of the stack with the
+load of the sample took 2 minutes and 17 seconds, and the 120 tests of the push
+selection took 2 minutes and 21 seconds, against 47 seconds on the development
+machine. The done condition of B10 in ADR-0016, that the jobs pass on the remote, is
+met by this run. The manual run of the whole suite has not been started, so the
+duration of the 27 slow tests on the runner is still not measured.
