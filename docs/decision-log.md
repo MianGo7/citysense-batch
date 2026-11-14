@@ -1078,3 +1078,67 @@ validated as far as it can be without the remote: the file was parsed, the comma
 of both jobs were run on the development machine, and the guard tests pass. The
 done condition of B10, that both jobs pass on the remote, is outstanding until the
 history has been published and the run has been seen.
+
+Note of 2026-11-14: the integration job described here ran the whole integration
+suite on every push and was cancelled at its limit of 30 minutes in the first run on
+the platform. ADR-0017 replaces that part with a selection that leaves out the slow
+tests, and adds a job for the whole suite that is started by hand.
+
+---
+
+## ADR-0017, a push run without the slow integration tests and a full run on request. 2026-11-14, accepted.
+
+This entry supersedes the part of ADR-0016 that gave the integration job the whole
+integration suite on every push and a limit of 30 minutes for it. The remainder of
+ADR-0016 stands. The first run on the platform (run 43615698440) passed the lint and
+the unit tests in 28 seconds and started the stack and the loader in 3 minutes and 5
+seconds, so the stack starts and loads on an x86 runner. The step that ran the whole
+integration suite began at 16:31:13 UTC and was cancelled at the limit at 16:58:14
+UTC, after 27 minutes. The log shows the progress of the suite: the files
+`test_alerts.py`, `test_database.py` and `test_derived.py` had completed 92 tests by
+16:32:29, which is 76 seconds after the start, and `test_loading.py` had completed 38
+of its 51 tests at 16:57:33, which is 25 minutes later. The suite was therefore
+progressing and not stuck. The output of plain pytest carries no time per test, so the
+log cannot show whether a single test took very long, and the workflow now runs pytest
+with `-v --durations=25 -o faulthandler_timeout=900`, which prints every test name, the
+25 slowest tests and a stack dump of all threads after 15 minutes without progress.
+These options are part of pytest and add no dependency.
+
+The suite takes 518 seconds on the development machine, measured with the same
+options. Of this time about 500 seconds belong to 27 of the 147 tests, which are
+the following. Eleven tests load the whole sample again in the test process into a
+scratch database: the reference load, the repeated and the interrupted loads, and the
+repeated alert evaluations, which take between 30 and 68 seconds each. Fifteen tests
+read the same collections through the fixture `loaded`, whose scratch case needs that
+reference load, so its cost is the one load that they share. One test waits for the
+timer of the server that removes expired readings, which wakes up every 60 seconds and
+takes 60 seconds by construction. On the runner, the 38 completed tests of `test_loading.py` took 25 minutes, while the
+whole of that file takes about 450 seconds on the development machine, the sum of its
+measured durations. The runner was therefore slower by a factor of at least three for
+this file. The cause is not established. The shared virtual machine under three
+database nodes with majority writes is a candidate, but it was not measured, and the
+first complete run on the runner will show it.
+
+The tests are marked `slow`, which is registered in `pyproject.toml`. The workflow
+runs `pytest -m "integration and not slow"` on every push and keeps the limit of 30
+minutes. The 120 tests that remain are what a fresh clone depends on: the stack, the
+roles of the nodes, the setup and the validators, the exit code of the loader, and the
+stored counts, summaries and alerts of the stack itself, each of which is checked
+against the pinned figures of the sample. This selection takes 47 seconds on the
+development machine. A third job, `integration-full`, runs the whole suite with a limit
+of 90 minutes, and only when a person starts the workflow by hand, so that one
+complete run on the runner can be recorded. The event is part of the concurrency group
+of the workflow, because otherwise a push would cancel a complete run that is still
+under way on the same branch. The whole suite remains the check on the development
+machine before every commit.
+
+Three alternatives were rejected. Raising the limit of the single job to 90 minutes
+was rejected, because every push would then wait up to that time and the cost on the
+platform would grow with each change, while the 120 tests answer the question that a
+push asks. Deleting or shortening the slow tests was rejected, because the figures that
+they pin, for instance that a load interrupted at any chunk ends equal to an
+uninterrupted one, are the correctness argument of the system. Running the slow tests
+on a schedule was rejected, because the manual start gives the same result and needs no
+timer that runs unattended on the repository. The consequence is that the push run no
+longer proves the slow cases. A change that breaks only one of them is found on the
+development machine, or by the manual run, and not by the push run.

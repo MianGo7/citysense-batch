@@ -434,6 +434,7 @@ def test_an_invalid_retention_fails_the_setup(database, value):
     )
 
 
+@pytest.mark.slow
 def test_the_ttl_monitor_removes_an_expired_reading_and_keeps_a_current_one(database, cleanup):
     # The TTL monitor of MongoDB wakes up every 60 seconds, so the wait is
     # bounded by 150 seconds, which covers two cycles. The ingestion time of the

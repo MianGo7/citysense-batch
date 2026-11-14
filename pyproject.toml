@@ -22,6 +22,7 @@ build-backend = "uv_build"
 testpaths = ["tests"]
 markers = [
   "integration: needs the running Docker Compose stack",
+  "slow: loads the whole sample in the test process or waits for a timer of the server",
 ]
 
 [tool.ruff]

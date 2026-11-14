@@ -240,6 +240,7 @@ def test_an_invalid_setting_stops_the_container_with_code_2(setting):
 # The load in this process, against scratch databases.
 
 
+@pytest.mark.slow
 def test_an_uninterrupted_load_has_the_measured_counts(reference):
     assert counts_of(reference) == BATCH_COUNTS
     assert reference.readings.count_documents({}) == STORED_READINGS
@@ -248,6 +249,7 @@ def test_an_uninterrupted_load_has_the_measured_counts(reference):
     )
 
 
+@pytest.mark.slow
 def test_the_load_of_the_stack_and_the_load_in_this_process_agree(client, reference):
     stack = {
         key: value
@@ -257,6 +259,7 @@ def test_the_load_of_the_stack_and_the_load_in_this_process_agree(client, refere
     assert stack == flags_of(reference)
 
 
+@pytest.mark.slow
 def test_a_second_load_without_the_batch_log_inserts_nothing(client, reference, scratch):
     # The batch log lets a completed batch be skipped, but the identifiers alone
     # keep the load idempotent, so the log is removed to show that.
@@ -273,6 +276,7 @@ def test_a_second_load_without_the_batch_log_inserts_nothing(client, reference, 
     assert flags_of(client[name]) == flags_of(reference)
 
 
+@pytest.mark.slow
 def test_loading_three_days_and_then_the_rest_equals_one_load(client, reference, scratch):
     # The daily arrival of data: three batches now, the following ones later.
     name = scratch()
@@ -283,6 +287,7 @@ def test_loading_three_days_and_then_the_rest_equals_one_load(client, reference,
     assert flags_of(client[name]) == flags_of(reference)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("day", "rows"),
     [
@@ -378,7 +383,8 @@ def test_the_rule_state_is_the_last_valid_reading_before_the_batch_and_its_jump_
 # The derived collections of the stack and of an uninterrupted load.
 
 
-@pytest.fixture(params=["stack", "scratch"])
+# The scratch case needs the load of the whole sample in this process, so it is slow.
+@pytest.fixture(params=["stack", pytest.param("scratch", marks=pytest.mark.slow)])
 def loaded(request, client, reference):
     return client[DATABASE] if request.param == "stack" else reference
 
@@ -462,6 +468,7 @@ def test_the_first_day_takes_its_baseline_from_its_own_full_hours(loaded):
     assert day["expected_count"] == 976.0 * 24
 
 
+@pytest.mark.slow
 def test_rerunning_every_batch_leaves_the_derived_collections_unchanged(client, scratch):
     name = scratch()
     assert load(name) == EXIT_OK
@@ -471,6 +478,7 @@ def test_rerunning_every_batch_leaves_the_derived_collections_unchanged(client, 
     assert snapshot(client[name]) == before
 
 
+@pytest.mark.slow
 def test_rerunning_an_early_day_changes_neither_the_summaries_nor_latest(client, scratch):
     # The sentinel of the guard on `latest`: the early day contains valid readings
     # that are older than the stored ones, and it must not move the latest value back.
@@ -602,6 +610,7 @@ def test_the_last_hour_would_have_made_every_sensor_silent_without_the_horizon(l
     assert loaded.alerts.count_documents({"type": "sensor_silent"}) == 0
 
 
+@pytest.mark.slow
 def test_rerunning_every_batch_leaves_the_alerts_unchanged(client, scratch):
     name = scratch()
     assert load(name) == EXIT_OK
@@ -614,6 +623,7 @@ def test_rerunning_every_batch_leaves_the_alerts_unchanged(client, scratch):
     assert sum(each["alerts_resolved"] for each in counts) == 0
 
 
+@pytest.mark.slow
 def test_rerunning_any_single_day_leaves_the_alerts_unchanged(client, scratch):
     # Each day is repeated in turn on the finished load, so that the alerts of the
     # later days exist already. An alert that spans midnight must keep its

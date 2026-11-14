@@ -158,18 +158,25 @@ stored are not rewritten (ADR-0014).
 The system itself needs only Docker. The tests are for development and need
 Python 3.13 with uv, which installs the environment from `uv.lock`.
 
-    uv run pytest tests/unit               # pure rules, no Docker needed
-    uv run pytest -m integration           # needs the compose stack running
+    uv run pytest tests/unit                          # pure rules, no Docker needed
+    uv run pytest -m integration                      # the whole suite, needs the stack running
+    uv run pytest -m "integration and not slow"       # the selection of the push workflow
     uv run ruff check .
     uv run ruff format --check .
 
 The unit tests cover the rules without a database. The integration tests run
 against the stack and check what a user of the data would see: counts, the
 agreement of the summaries with the raw readings, repeated runs that change
-nothing, and the alerts of the sample week. They take about eight minutes.
+nothing, and the alerts of the sample week. The whole suite takes about nine minutes
+on the development machine, which is the check before every commit. A part of it,
+marked `slow`, loads the whole sample again in the test process and waits for the
+timer of the server that removes expired readings. The push workflow leaves that part
+out and keeps what a fresh clone depends on, and the whole suite can be started by
+hand on the platform (ADR-0017).
 
 A workflow in `.github/workflows/ci.yml` runs the lint and the unit tests on every push,
-and then the integration tests on a freshly started stack (ADR-0016).
+and then the integration tests that are not marked `slow` on a freshly started stack
+(ADR-0016, ADR-0017).
 
 ## Project structure
 

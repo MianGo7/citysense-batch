@@ -644,3 +644,38 @@ backlog says so instead of marking the item done. The requirement R5 and the REA
 statement about the processor are left to the student until a run and the visibility
 of the repository have been observed. The hosted runners have an x86 processor, so a
 successful run will also be the first evidence about the stack outside Apple silicon.
+
+## 2026-11-14, the first run on the platform
+
+The student pushed the history, and the first run of the workflow (run 43615698440) was
+cancelled at the limit of 30 minutes in the step of the integration tests. The lint and
+the unit tests had passed in 28 seconds, and the stack had started and loaded in 3
+minutes and 5 seconds, which is the first evidence that the stack works on an x86
+processor. The log of the run was read with the GitHub command line tool after the
+student had logged in. An earlier attempt of this session stopped after the check of
+the login and did not run the command that was asked for, and that was an error of
+procedure, which the student pointed out.
+
+The log shows a suite that progressed slowly and not a test that stood still. Three
+files with 92 tests were complete after 76 seconds, and 38 of the 51 tests of
+`test_loading.py` were complete 25 minutes after that. Plain pytest prints no time per
+test, so the log cannot exclude that a single test took long, and the workflow now
+prints every test, the 25 slowest and a stack dump after 15 minutes without progress.
+The same options were used for a run of the whole suite on the development machine,
+which took 518 seconds, and it showed where the time goes: 27 of the 147 tests need
+about 500 seconds, because they load the whole sample again in the test process or
+wait for the 60 second timer of the server. On the runner, the 38 completed tests of
+`test_loading.py` took 25 minutes, against about 450 seconds for the whole file on the development machine, so the runner was at
+least three times slower there. The reason for that factor was not measured.
+
+The tests were therefore marked `slow` and split off, as the student approved. The push
+run selects the 120 tests that are not marked and took 47 seconds on the development
+machine, and a job that only a manual start runs the whole suite of 147 tests with a
+limit of 90 minutes. The decision is ADR-0017. One detail was found while changing the
+workflow: with the event left out of the concurrency group, a push would have
+cancelled a complete run started by hand on the same branch, so the group now contains
+the event. The marks on the scratch case of the fixture `loaded` were checked by
+counting the selection, because the number of tests that the marker covers, 27, has to
+agree with the sum of the tests that were meant: eleven loads, fifteen reads of the
+reference and the timer test. The done condition of B10 is still outstanding until the
+push run has been seen to pass.
