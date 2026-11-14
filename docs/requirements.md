@@ -14,9 +14,9 @@ which is not committed.
 | R2 | A script sets up the database inside the container | done | `db/setup-database.js`, service `mongo-setup` in `docker-compose.yml`, `tests/integration/test_database.py` (ADR-0010) |
 | R3 | A Python script connects to the database and loads the sample data | done | `src/citysense/loader.py`, `store.py`, `config.py`, `__main__.py` (ADR-0012), `tests/unit/test_loader.py`, `tests/integration/test_loading.py` |
 | R4 | A Dockerfile automates the entire process | done | `Dockerfile` (two stages, pinned bases, non-root user, `uv sync --locked`), service `loader` in `docker-compose.yml` (ADR-0012) |
-| R5 | The code is in an open GitHub repository | open | |
+| R5 | The code is in an open GitHub repository | open | The repository is local and has no remote; creating the public repository and publishing the history is a step for the student |
 | R6 | Cloning the repository and running the containers loads the sample data automatically | done | `docker compose down -v && docker compose up --build` loads 405,171 readings and the loader container exits with code 0, checked by `test_the_stack_stored_the_sample_without_its_duplicates` and `test_the_loader_container_of_the_stack_exited_with_code_0` in `tests/integration/test_loading.py`; the image was also built from a copy of the tracked files alone, which holds none of the tooling files |
-| R7 | The repository contains a system description with the expected usages and the place of the system in a larger end user system | open | |
+| R7 | The repository contains a system description with the expected usages and the place of the system in a larger end user system | done | `README.md`: purpose, the three users and what each reads, a diagram of the place between sensors, front ends and operations, quick start, verification, configuration, structure, data source and limits; `tests/unit/test_readme.py` checks the paths and the figures; the quick start was followed on a copy of the tracked files alone, which loaded 405,171 readings and ended with exit code 0 |
 
 ## Commitments of the concept
 

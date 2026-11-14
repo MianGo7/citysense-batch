@@ -584,3 +584,35 @@ and keeps the time of its acknowledgement.
 
 Next is B9, the README as the system description, which has to carry the note about
 the processor instruction set that the image of the database needs, and the limits.
+
+## 2026-11-14
+
+B9, the README as the system description, was taken after the commit of B8. It
+holds the purpose, the three users with what each reads, a diagram of the place of
+the system between the sensors, the two planned front ends and the operators, the
+quick start, the verification with the three demonstrations, the configuration, the
+project structure, the data source with its licence, and the limits, among them the
+note on the AVX instruction set that ADR-0009 had left for this item. The diagram is
+written in Mermaid, which the platform that hosts the repository renders, so that no
+image file has to be kept in step with the text. The front ends are drawn as planned
+and not part of the repository, because the concept states them so.
+
+The done condition of the item is a fresh clone on a machine with nothing but Docker.
+The check was made on a copy of the tracked files alone, in an empty directory, after
+`docker compose down -v`, by the command of the README. The loader read 405,184 rows,
+stored 405,171 readings, flagged 580 and ended with exit code 0 after 20.7 seconds. The
+commands that the README gives for looking at the data returned the latest values and
+the alerts, the counts agreed with the pinned figures, and a second start skipped all
+nine batches. The copy held none of the tooling files. What this check does not cover
+is a machine other than the development machine, which is an Apple silicon computer, so
+the README says that the system was not tested on x86.
+
+Two statements of the README were written with care because they could not be
+measured. The load time is given as the range of the runs of this development machine
+and not as a promise, and the AVX note says that the nodes are not expected to start
+without the instruction set, which follows from the requirement of the product and was
+not tried. A unit test now checks that every path that the README names exists and that
+the figures of the quick start are those that the integration tests pin.
+
+The requirement R7 is done. R5, the open GitHub repository, stays open, because the
+repository has no remote and publishing it is a step for the student.

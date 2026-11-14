@@ -183,7 +183,7 @@ Documents to update: `requirements.md`, `dev-journal.md`.
 
 ---
 
-## B9, README as system description. Open.
+## B9, README as system description. Done, 2026-11-14.
 
 The README describes the purpose, the three user types and what each reads,
 how the system fits into the larger landscape with sensors, dashboard,
