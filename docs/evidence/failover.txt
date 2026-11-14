@@ -1,0 +1,77 @@
+
+== 1. The standard: an uninterrupted load on a clean stack
+readings           405171 documents  sha256 8b37fe9b45a2b0e9
+summaries_hourly      579 documents  sha256 e15b2c2573606829
+summaries_daily        27 documents  sha256 b3fe08a756b97189
+latest                  3 documents  sha256 e76898dbed1e7855
+alerts                 14 documents  sha256 57ed54bea98bed05
+
+== 2. The same load, with the primary killed in the middle of the batch 2020-07-14
+before: mongo1:27017 PRIMARY, mongo2:27017 SECONDARY, mongo3:27017 SECONDARY
+the loader is in the middle of batch 2020-07-14, 20390 of its readings are stored
+mongo1, the primary, was killed
+
+== 3. The election and the progress of the loader, one sample per second
+t+0s batch and stored readings: 2020-07-14 20831
+t+11s a new primary is elected: mongo3:27017
+t+11s batch and stored readings: 2020-07-14 32307
+t+13s batch and stored readings: 2020-07-14 43570
+t+14s batch and stored readings: none 0
+t+15s batch and stored readings: 2020-07-15 10259
+t+17s batch and stored readings: 2020-07-15 21078
+t+18s batch and stored readings: 2020-07-15 32448
+t+19s batch and stored readings: 2020-07-15 43587
+t+21s batch and stored readings: none 0
+t+22s batch and stored readings: 2020-07-16 9390
+t+23s batch and stored readings: 2020-07-16 20740
+t+25s batch and stored readings: 2020-07-16 32190
+t+26s batch and stored readings: 2020-07-16 42870
+t+27s batch and stored readings: none 0
+t+28s batch and stored readings: 2020-07-17 9329
+t+30s batch and stored readings: 2020-07-17 20639
+t+31s batch and stored readings: 2020-07-17 31837
+t+32s batch and stored readings: 2020-07-17 42799
+t+34s batch and stored readings: none 0
+t+35s batch and stored readings: 2020-07-18 10019
+t+36s batch and stored readings: 2020-07-18 21449
+t+38s batch and stored readings: 2020-07-18 32307
+t+39s batch and stored readings: 2020-07-18 43913
+t+40s batch and stored readings: 2020-07-19 69
+t+42s batch and stored readings: 2020-07-19 11738
+t+43s batch and stored readings: 2020-07-19 22957
+t+44s batch and stored readings: 2020-07-19 34608
+t+46s batch and stored readings: 2020-07-19 46061
+t+47s batch and stored readings: none 0
+the loader ended with exit code 0
+2026-11-14 11:35:13,275 INFO batch 2020-07-12 completed: read 50462, inserted 50461, already present 1, flagged 89, alerts opened 4, resolved 1, suppressed 0, duration 8.9 s
+2026-11-14 11:35:22,450 INFO batch 2020-07-13 completed: read 50121, inserted 50120, already present 1, flagged 65, alerts opened 0, resolved 3, suppressed 0, duration 9.0 s
+2026-11-14 11:35:40,404 INFO batch 2020-07-14 completed: read 50719, inserted 50718, already present 1, flagged 67, alerts opened 0, resolved 0, suppressed 0, duration 17.8 s
+2026-11-14 11:35:46,972 INFO batch 2020-07-15 completed: read 51058, inserted 51055, already present 3, flagged 70, alerts opened 1, resolved 0, suppressed 0, duration 6.4 s
+2026-11-14 11:35:53,627 INFO batch 2020-07-16 completed: read 51040, inserted 51040, already present 0, flagged 79, alerts opened 6, resolved 4, suppressed 0, duration 6.5 s
+2026-11-14 11:36:00,161 INFO batch 2020-07-17 completed: read 50386, inserted 50384, already present 2, flagged 68, alerts opened 1, resolved 3, suppressed 0, duration 6.3 s
+2026-11-14 11:36:06,627 INFO batch 2020-07-18 completed: read 50074, inserted 50071, already present 3, flagged 57, alerts opened 1, resolved 1, suppressed 0, duration 6.3 s
+2026-11-14 11:36:13,226 INFO batch 2020-07-19 completed: read 51196, inserted 51194, already present 2, flagged 85, alerts opened 1, resolved 2, suppressed 0, duration 6.4 s
+2026-11-14 11:36:13,261 INFO batch 2020-07-20 completed: read 128, inserted 128, already present 0, flagged 0, alerts opened 0, resolved 0, suppressed 0, duration 0.0 s
+2026-11-14 11:36:13,262 INFO finished: 9 batches loaded, 0 skipped, read 405184, inserted 405171, already present 13, flagged 580, duration 69.0 s
+
+== 4. The node that was killed rejoins
+after: mongo1:27017 SECONDARY, mongo2:27017 SECONDARY, mongo3:27017 PRIMARY
+
+== 5. The result
+2020-07-12  completed  attempts 1  read 50462  inserted 50461  present 1  flagged 89
+2020-07-13  completed  attempts 1  read 50121  inserted 50120  present 1  flagged 65
+2020-07-14  completed  attempts 1  read 50719  inserted 50718  present 1  flagged 67
+2020-07-15  completed  attempts 1  read 51058  inserted 51055  present 3  flagged 70
+2020-07-16  completed  attempts 1  read 51040  inserted 51040  present 0  flagged 79
+2020-07-17  completed  attempts 1  read 50386  inserted 50384  present 2  flagged 68
+2020-07-18  completed  attempts 1  read 50074  inserted 50071  present 3  flagged 57
+2020-07-19  completed  attempts 1  read 51196  inserted 51194  present 2  flagged 85
+2020-07-20  completed  attempts 1  read 128  inserted 128  present 0  flagged 0
+readings           405171 documents  sha256 8b37fe9b45a2b0e9
+summaries_hourly      579 documents  sha256 e15b2c2573606829
+summaries_daily        27 documents  sha256 b3fe08a756b97189
+latest                  3 documents  sha256 e76898dbed1e7855
+alerts                 14 documents  sha256 57ed54bea98bed05
+every collection equals the uninterrupted load, document for document
+
+== PASS: the loader survived the loss of the primary, new primary after about 11s

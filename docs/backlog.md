@@ -163,7 +163,7 @@ Documents to update: `decision-log.md`, `requirements.md`, `dev-journal.md`.
 
 ---
 
-## B8, demonstrations and verification queries. Open.
+## B8, demonstrations and verification queries. Done, 2026-11-14.
 
 `scripts/demo_crash_rerun.sh` stops the loader in the middle of a batch,
 restarts it and shows that the final counts are unchanged.

@@ -1,0 +1,52 @@
+
+== 1. The standard: an uninterrupted load on a clean stack
+readings           405171 documents  sha256 8b37fe9b45a2b0e9
+summaries_hourly      579 documents  sha256 e15b2c2573606829
+summaries_daily        27 documents  sha256 b3fe08a756b97189
+latest                  3 documents  sha256 e76898dbed1e7855
+alerts                 14 documents  sha256 57ed54bea98bed05
+
+== 2. The same load, killed in the middle of the batch 2020-07-14
+the loader is in the middle of batch 2020-07-14, 20760 of its readings are stored
+exit code of the killed loader: 137 (137 is SIGKILL)
+2026-11-14 11:38:17,982 INFO batch 2020-07-12 completed: read 50462, inserted 50461, already present 1, flagged 89, alerts opened 4, resolved 1, suppressed 0, duration 9.6 s
+2026-11-14 11:38:27,725 INFO batch 2020-07-13 completed: read 50121, inserted 50120, already present 1, flagged 65, alerts opened 0, resolved 3, suppressed 0, duration 9.6 s
+
+== 3. What the crash left behind
+2020-07-12  completed  attempts 1  read 50462  inserted 50461  present 1  flagged 89
+2020-07-13  completed  attempts 1  read 50121  inserted 50120  present 1  flagged 65
+2020-07-14  running    attempts 1  no counts yet
+the batch 2020-07-14 is still running, and no later batch exists
+
+== 4. The next run
+2026-11-14 11:38:33,650 INFO batch 2020-07-12 skipped, already completed
+2026-11-14 11:38:33,835 INFO batch 2020-07-13 skipped, already completed
+2026-11-14 11:38:35,846 INFO batch 2020-07-14 completed: read 50719, inserted 29748, already present 20971, flagged 67, alerts opened 0, resolved 0, suppressed 0, duration 1.8 s
+2026-11-14 11:38:38,499 INFO batch 2020-07-15 completed: read 51058, inserted 51055, already present 3, flagged 70, alerts opened 1, resolved 0, suppressed 0, duration 2.5 s
+2026-11-14 11:38:41,102 INFO batch 2020-07-16 completed: read 51040, inserted 51040, already present 0, flagged 79, alerts opened 6, resolved 4, suppressed 0, duration 2.4 s
+2026-11-14 11:38:43,667 INFO batch 2020-07-17 completed: read 50386, inserted 50384, already present 2, flagged 68, alerts opened 1, resolved 3, suppressed 0, duration 2.4 s
+2026-11-14 11:38:46,209 INFO batch 2020-07-18 completed: read 50074, inserted 50071, already present 3, flagged 57, alerts opened 1, resolved 1, suppressed 0, duration 2.3 s
+2026-11-14 11:38:48,875 INFO batch 2020-07-19 completed: read 51196, inserted 51194, already present 2, flagged 85, alerts opened 1, resolved 2, suppressed 0, duration 2.5 s
+2026-11-14 11:38:48,899 INFO batch 2020-07-20 completed: read 128, inserted 128, already present 0, flagged 0, alerts opened 0, resolved 0, suppressed 0, duration 0.0 s
+2026-11-14 11:38:48,900 INFO finished: 7 batches loaded, 2 skipped, read 304601, inserted 283620, already present 20981, flagged 426, duration 15.4 s
+
+== 5. The result
+2020-07-12  completed  attempts 1  read 50462  inserted 50461  present 1  flagged 89
+2020-07-13  completed  attempts 1  read 50121  inserted 50120  present 1  flagged 65
+2020-07-14  completed  attempts 2  read 50719  inserted 29748  present 20971  flagged 67
+2020-07-15  completed  attempts 1  read 51058  inserted 51055  present 3  flagged 70
+2020-07-16  completed  attempts 1  read 51040  inserted 51040  present 0  flagged 79
+2020-07-17  completed  attempts 1  read 50386  inserted 50384  present 2  flagged 68
+2020-07-18  completed  attempts 1  read 50074  inserted 50071  present 3  flagged 57
+2020-07-19  completed  attempts 1  read 51196  inserted 51194  present 2  flagged 85
+2020-07-20  completed  attempts 1  read 128  inserted 128  present 0  flagged 0
+the interrupted batch was repeated: 2 attempts, status completed
+readings           405171 documents  sha256 8b37fe9b45a2b0e9
+summaries_hourly      579 documents  sha256 e15b2c2573606829
+summaries_daily        27 documents  sha256 b3fe08a756b97189
+latest                  3 documents  sha256 e76898dbed1e7855
+alerts                 14 documents  sha256 57ed54bea98bed05
+every collection equals the uninterrupted load, document for document
+readings stored: 405171, expected 405171
+
+== PASS: the rerun after a crash equals the uninterrupted load

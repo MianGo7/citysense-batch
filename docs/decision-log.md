@@ -938,3 +938,85 @@ cap depend on the stored alerts, so an alert document that is deleted by hand is
 raised again at the next evaluation of its hours. A device without readings in
 the database is not known to the evaluation, so only a device that has delivered
 before can be silent.
+
+---
+
+## ADR-0015, the demonstrations of the failures and the verification queries. 2026-11-14, accepted.
+
+Two failures are shown on the real stack and not only simulated in the tests: a
+loader that is killed in the middle of a batch, and a primary that is killed in
+the middle of a load. `scripts/demo_crash_rerun.sh` and `scripts/demo_failover.sh`
+run them, `scripts/demo_queries.sh` shows the queries of the three users and the
+acknowledgement of an alert, and each script keeps its output in `docs/evidence/`.
+The scripts start from clean volumes, because a demonstration has to be
+reproducible, and they therefore remove the volumes `citysense_*` of this project
+and nothing else. A run in a scratch database next to the data of the stack was
+rejected, because a scratch database has neither the validators nor the indexes of
+the setup script, so that it would show a system that differs from the delivered
+one. The scripts need Docker and a shell and nothing else, and the hashing runs
+inside the container of the database, so that no tool of the host is assumed.
+
+Both demonstrations compare the result with a load that was never interrupted,
+which the script produces first on a clean stack. The comparison is a hash over
+every document of `readings`, `summaries_hourly`, `summaries_daily`, `latest` and
+`alerts`, with the keys of each document sorted, so that two databases are equal
+when every document is equal, and not only when the counts agree. A comparison of
+the counts alone was rejected, because a rerun could repeat the right number of
+readings with a wrong flag or a wrong mean and the counts would still agree. Two
+things are left out of the hash by design: the ingestion time of a reading, which
+is the time of the write, and the batch log, whose attempts and counts differ
+because the interrupted batch was written twice, which is what the demonstration
+shows. The sample has 405,171 readings, 579 hourly and 27 daily summaries, 3
+latest values and 14 alerts, and the five hashes of the interrupted loads equal
+those of the uninterrupted one.
+
+The loader is killed with SIGKILL, and the primary with `docker compose kill`,
+which is SIGKILL as well. A graceful stop was rejected for both. The loader gets a
+termination signal from `docker stop` and could end in an orderly way, and a
+primary that is stopped hands over its role within a fraction of a second, as
+measured in B2, whereas a kill leaves the cluster to notice the loss, which takes
+about 11 seconds. A batch lasts about 2 seconds, which is too short to hit with a
+polling loop, so the demonstrations load with a chunk size of 10 instead of 5,000.
+A batch then lasts about 10 seconds, and the loader is killed as soon as the third
+batch has stored 20,000 of its readings. The data do not depend on the chunk size,
+and the hashes show that.
+
+The crash leaves the batch 2020-07-14 with the status running and part of its
+readings stored. The next run skips the two completed days, repeats the batch,
+finds the stored readings already present and inserts the rest, and the batch log
+shows two attempts and the status completed. The readings that were written
+before the crash are recognised by their identifiers and are not written twice,
+which is the idempotence of ADR-0004 and ADR-0012 shown on a real kill and not on a
+simulated one.
+
+The loss of the primary has a finding that is stated here, because it limits what
+the demonstration shows. The loader logs no retry in the demonstration. The driver
+repeats a single write once after a failover by itself, as `retryWrites` asks
+(ADR-0012), and it first waits for a new primary for up to the server selection
+timeout of 30 seconds, which is longer than the election of about 11 seconds. The
+write that was in flight therefore completes after the election without an error
+reaching the loader, and the batch in progress takes about 18 seconds instead of
+about 9. The schedule of the loader itself, which waits 2, 4, 8, 16 and 30 seconds,
+covers an outage that outlasts the wait of the driver, and it is tested with
+injected errors in `tests/unit/test_loader.py` but not shown on the stack. Forcing
+an outage longer than 30 seconds would need a second node to be stopped as well,
+which leaves no majority, and the writes would then wait for the node to return and
+not show a retry of the loader. The demonstration shows the first layer of the
+defence and the tests show the second one. The node that was killed rejoins as a
+secondary after it is started again, and the primary stays where the election put
+it for the moment of the check, although `mongo1` has the highest priority.
+
+The queries of `scripts/queries.js` answer one question per user of the concept.
+The planner reads the hourly profile of a device and the daily means per device
+from the summaries, with the count of readings and the coverage next to every
+mean. The citizen reads the latest value of each sensor with its measurement time,
+and the alerts that are open or acknowledged with their recommended action. The
+engineer reads the batch log, the flagged readings by rule, the alerts about the
+loader that are not resolved and the storage of the readings. The file only reads,
+except for the last section, which acknowledges an alert if the environment
+variable `ACKNOWLEDGE` names an open alert, and the filter names the status open,
+so that an alert that is resolved is not touched. `scripts/demo_queries.sh` loads
+the first day alone, because the sample week has no open alert at its end, and
+acknowledges an alert that is still open. After the other days are loaded, the
+alert is resolved and keeps the time of its acknowledgement, which shows the
+status `acknowledged` of the alert model on real data and not only in a test.

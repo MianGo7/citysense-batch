@@ -1,0 +1,129 @@
+
+== 1. A clean stack with the first day loaded
+2026-11-14 11:39:27,749 INFO batch 2020-07-12 completed: read 50462, inserted 50461, already present 1, flagged 89, alerts opened 4, resolved 1, suppressed 0, duration 2.3 s
+2026-11-14 11:39:27,750 INFO stopped after 1 batches, as MAX_BATCHES asks
+2026-11-14 11:39:27,750 INFO finished: 1 batches loaded, 0 skipped, read 50462, inserted 50461, already present 1, flagged 89, duration 2.5 s
+
+== 2. The queries of the three users, with alerts still open
+
+-- Planner: hourly temperature of 1c:bf:ce:15:ec:4d from 2020-07-15T06:00:00Z to 2020-07-15T18:00:00Z
+hour                  readings  coverage  min     mean    max
+
+-- Planner: how locations differ, the mean of the daily means over the stored days
+device               days  temp    humidity
+00:0f:00:70:91:0a     1  19.30  74.83
+1c:bf:ce:15:ec:4d     1  26.28  67.06
+b8:27:eb:bf:9d:51     1  21.81  51.39
+
+-- Citizen: the latest valid value of every sensor, with its measurement time
+device               measured at           temp   humidity  co       batch
+00:0f:00:70:91:0a  2020-07-12T23:59:55.652Z   18.9      73.8  0.0119  2020-07-12
+1c:bf:ce:15:ec:4d  2020-07-12T23:59:57.721Z   27.0      58.1  0.0046  2020-07-12
+b8:27:eb:bf:9d:51  2020-07-12T23:59:58.957Z   21.6      50.1  0.0057  2020-07-12
+
+-- Citizen: the alerts that are open or acknowledged
+warning open threshold|00:0f:00:70:91:0a|co|2020-07-12T22:00:00Z
+  Hourly mean carbon monoxide 0.00842 above limit 0.0075 at 00:0f:00:70:91:0a
+  since 2020-07-12T22:00:00Z, 1 hours, action: Check the location and inform the affected district.
+warning open threshold|00:0f:00:70:91:0a|lpg|2020-07-12T22:00:00Z
+  Hourly mean liquefied petroleum gas 0.01117 above limit 0.01 at 00:0f:00:70:91:0a
+  since 2020-07-12T22:00:00Z, 1 hours, action: Check the location and inform the affected district.
+warning open threshold|00:0f:00:70:91:0a|smoke|2020-07-12T22:00:00Z
+  Hourly mean smoke 0.0306 above limit 0.03 at 00:0f:00:70:91:0a
+  since 2020-07-12T22:00:00Z, 1 hours, action: Check the location and inform the affected district.
+
+-- Engineer: the batch log
+2020-07-12  completed  attempts 1  read 50462  inserted 50461  present 1  flagged 89  alerts opened 4 resolved 1 suppressed 0
+
+-- Engineer: the readings that were flagged, by rule
+humidity_jump      59
+temp_jump          45
+
+-- Engineer: alerts about the loader that are not resolved
+none
+
+-- Engineer: storage
+readings: 50461 documents, 11.8 MiB of data, 2.7 MiB on disk, 246 bytes per document
+alerts: 4 documents in total
+
+-- Engineer: acknowledging an alert
+not run. Set ACKNOWLEDGE to the identifier of an open alert to acknowledge it.
+
+== 3. An engineer acknowledges the first open alert
+-- Engineer: acknowledging an alert
+threshold|00:0f:00:70:91:0a|co|2020-07-12T22:00:00Z: matched 1, modified 1
+status acknowledged, acknowledged at 2026-11-14T11:39:28.843Z
+
+== 4. The rest of the sample is loaded
+2026-11-14 11:39:29,996 INFO batch 2020-07-12 skipped, already completed
+2026-11-14 11:39:32,551 INFO batch 2020-07-13 completed: read 50121, inserted 50120, already present 1, flagged 65, alerts opened 0, resolved 3, suppressed 0, duration 2.4 s
+2026-11-14 11:39:35,170 INFO batch 2020-07-14 completed: read 50719, inserted 50718, already present 1, flagged 67, alerts opened 0, resolved 0, suppressed 0, duration 2.4 s
+2026-11-14 11:39:37,886 INFO batch 2020-07-15 completed: read 51058, inserted 51055, already present 3, flagged 70, alerts opened 1, resolved 0, suppressed 0, duration 2.5 s
+2026-11-14 11:39:40,584 INFO batch 2020-07-16 completed: read 51040, inserted 51040, already present 0, flagged 79, alerts opened 6, resolved 4, suppressed 0, duration 2.5 s
+2026-11-14 11:39:43,159 INFO batch 2020-07-17 completed: read 50386, inserted 50384, already present 2, flagged 68, alerts opened 1, resolved 3, suppressed 0, duration 2.4 s
+2026-11-14 11:39:45,796 INFO batch 2020-07-18 completed: read 50074, inserted 50071, already present 3, flagged 57, alerts opened 1, resolved 1, suppressed 0, duration 2.5 s
+2026-11-14 11:39:48,413 INFO batch 2020-07-19 completed: read 51196, inserted 51194, already present 2, flagged 85, alerts opened 1, resolved 2, suppressed 0, duration 2.4 s
+2026-11-14 11:39:48,438 INFO batch 2020-07-20 completed: read 128, inserted 128, already present 0, flagged 0, alerts opened 0, resolved 0, suppressed 0, duration 0.0 s
+2026-11-14 11:39:48,438 INFO finished: 8 batches loaded, 1 skipped, read 354722, inserted 354710, already present 12, flagged 491, duration 18.6 s
+
+== 5. The acknowledged alert after the evaluation of the later days
+threshold|00:0f:00:70:91:0a|co|2020-07-12T22:00:00Z: resolved, acknowledged_at 2026-11-14T11:39:28.843Z, resolved_at 2020-07-13T03:00:00.000Z
+
+== 6. The queries of the three users on the whole sample
+
+-- Planner: hourly temperature of 1c:bf:ce:15:ec:4d from 2020-07-15T06:00:00Z to 2020-07-15T18:00:00Z
+hour                  readings  coverage  min     mean    max
+2020-07-15T06:00:00Z       560     1.024     25.0    25.27     25.5
+2020-07-15T07:00:00Z       556     1.016     24.5    24.80     25.1
+2020-07-15T08:00:00Z       557     1.018     22.6    24.36     24.6
+2020-07-15T09:00:00Z       557     1.018     23.0    23.97     24.2
+2020-07-15T10:00:00Z       584     1.068     23.6    23.66     23.8
+2020-07-15T11:00:00Z       579     1.059     22.4    23.74     24.0
+2020-07-15T12:00:00Z       566     1.035     23.9    24.33     24.9
+2020-07-15T13:00:00Z       531     0.971     23.7    25.34     25.6
+2020-07-15T14:00:00Z       589     1.077     25.6    25.91     26.4
+2020-07-15T15:00:00Z       609     1.113     26.3    26.99     27.3
+2020-07-15T16:00:00Z       613     1.121     27.1    27.28     27.5
+2020-07-15T17:00:00Z       587     1.073     27.4    27.72     28.0
+
+-- Planner: how locations differ, the mean of the daily means over the stored days
+device               days  temp    humidity
+00:0f:00:70:91:0a     9  19.37  75.48
+1c:bf:ce:15:ec:4d     9  26.10  63.55
+b8:27:eb:bf:9d:51     9  22.31  50.64
+
+-- Citizen: the latest valid value of every sensor, with its measurement time
+device               measured at           temp   humidity  co       batch
+00:0f:00:70:91:0a  2020-07-20T00:03:36.979Z   19.2      75.3  0.0037  2020-07-20
+1c:bf:ce:15:ec:4d  2020-07-20T00:03:36.167Z   26.6      75.7  0.0045  2020-07-20
+b8:27:eb:bf:9d:51  2020-07-20T00:03:37.264Z   22.2      48.4  0.0059  2020-07-20
+
+-- Citizen: the alerts that are open or acknowledged
+none, which is only an all clear if the sensors are reporting, see the latest values
+
+-- Engineer: the batch log
+2020-07-12  completed  attempts 1  read 50462  inserted 50461  present 1  flagged 89  alerts opened 4 resolved 1 suppressed 0
+2020-07-13  completed  attempts 1  read 50121  inserted 50120  present 1  flagged 65  alerts opened 0 resolved 3 suppressed 0
+2020-07-14  completed  attempts 1  read 50719  inserted 50718  present 1  flagged 67  alerts opened 0 resolved 0 suppressed 0
+2020-07-15  completed  attempts 1  read 51058  inserted 51055  present 3  flagged 70  alerts opened 1 resolved 0 suppressed 0
+2020-07-16  completed  attempts 1  read 51040  inserted 51040  present 0  flagged 79  alerts opened 6 resolved 4 suppressed 0
+2020-07-17  completed  attempts 1  read 50386  inserted 50384  present 2  flagged 68  alerts opened 1 resolved 3 suppressed 0
+2020-07-18  completed  attempts 1  read 50074  inserted 50071  present 3  flagged 57  alerts opened 1 resolved 1 suppressed 0
+2020-07-19  completed  attempts 1  read 51196  inserted 51194  present 2  flagged 85  alerts opened 1 resolved 2 suppressed 0
+2020-07-20  completed  attempts 1  read 128  inserted 128  present 0  flagged 0  alerts opened 0 resolved 0 suppressed 0
+
+-- Engineer: the readings that were flagged, by rule
+temp_jump          350
+humidity_jump      319
+
+-- Engineer: alerts about the loader that are not resolved
+none
+
+-- Engineer: storage
+readings: 405171 documents, 95.1 MiB of data, 21.4 MiB on disk, 246 bytes per document
+alerts: 14 documents in total
+
+-- Engineer: acknowledging an alert
+not run. Set ACKNOWLEDGE to the identifier of an open alert to acknowledge it.
+
+== PASS: the queries answer the three users, and an acknowledged alert is resolved with its time kept

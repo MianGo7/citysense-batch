@@ -542,3 +542,45 @@ readings did not change.
 
 Next is B8, with the demonstrations and the verification queries, which include the
 acknowledgement of an alert by an engineer.
+
+## 2026-11-14
+
+B8, the demonstrations and the verification queries, was taken straight after the
+commit of B7. The result is three scripts, `demo_crash_rerun.sh`, `demo_failover.sh`
+and `demo_queries.sh`, a shared file `demo_common.sh`, a script `digest.js` that
+hashes a collection, `queries.js` with one example query per user, and the captured
+output of each script in `docs/evidence/`. A unit test checks that the shell files
+parse and that the query file writes only when an alert is named. ADR-0015 records
+the choices.
+
+The central decision was how to decide that a rerun is correct. Comparing counts was
+rejected, because a rerun could repeat the right number of readings with a wrong flag
+and the counts would still agree. Each script first produces an uninterrupted load on
+a clean stack, then the interrupted one, and compares a hash over every document of
+five collections, with the ingestion time and the batch log left out by design. The
+hashes agree for the crash and for the loss of the primary. A batch takes about two
+seconds, which a polling loop cannot hit reliably, so the demonstrations use a chunk
+size of 10, which stretches a batch to about ten seconds, and the hashes show that the
+chunk size does not change the data.
+
+The loss of the primary produced a finding that was not expected. The loader logged no
+retry of its own. The driver repeats a write once after a failover, and it first waits
+for a new primary for up to 30 seconds, which is longer than the election of about 11
+seconds, so the write in flight completed after the election without an error reaching
+the loader, and the batch in progress took about 18 seconds instead of 9. The retry
+schedule of the loader was therefore not triggered on the stack. It remains covered by
+the unit tests with injected errors, and C5 states this in `requirements.md` instead of
+claiming a demonstration that did not take place. An outage longer than the wait of the
+driver would need a second node to be stopped, which removes the majority, so the
+second layer of the defence was not forced.
+
+Smaller problems: the first version of the batch table printed `undefined` for the
+batch that was left running, because a running batch has no counts yet, and Compose
+printed its container messages into the transcripts, which were removed from the
+evidence by redirecting them. The sample week has no alert that is open at its end, so
+the demonstration of the acknowledgement loads the first day alone, acknowledges an
+alert that is still open, and then loads the rest, after which the alert is resolved
+and keeps the time of its acknowledgement.
+
+Next is B9, the README as the system description, which has to carry the note about
+the processor instruction set that the image of the database needs, and the limits.
